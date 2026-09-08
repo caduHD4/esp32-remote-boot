@@ -85,7 +85,7 @@ bash ipxe/build.sh 192.0.2.10
 
 Em Linux que usa ptrace e impede LeakSanitizer: `ASAN_OPTIONS=detect_leaks=0 bash tests/run.sh` mantém AddressSanitizer/UBSan, mas não valida leaks.
 
-Os workflows estão em `.github/workflows`. Não foi feito push/publicação. Para subir manualmente, revise arquivos e execute `git init`, `git add .`, `git commit -m "Initial public release"`.
+Os workflows estão em `.github/workflows`. Para trabalhar localmente, clone o repositório, revise os arquivos e crie commits normalmente.
 
 ## Documentação
 
