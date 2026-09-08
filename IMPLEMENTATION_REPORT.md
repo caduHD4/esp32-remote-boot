@@ -6,7 +6,7 @@ Data: 2026-09-08. Estado: **implementação experimental compilada e testada em 
 
 `esp32-remote-boot-repo.zip`: repositório de código completo, com README, firmware, UI, app EFI, builder iPXE, installers, agents, testes, workflows e documentação. `IMPLEMENTATION_REPORT.md`: este relatório, também incluído no ZIP.
 
-O ZIP não contém toolchains, caches, binários pré-compilados nem o snapshot privado. O build gera os binários. Não houve push, criação de repositório remoto ou publicação no GitHub. A UKI privada, IP/MAC/UUIDs e logs pessoais não foram copiados.
+O pacote fonte não contém toolchains, caches, binários pré-compilados nem o snapshot privado. O build gera os binários. A UKI privada, IP/MAC/UUIDs e logs pessoais não foram copiados.
 
 ## Implementado
 
