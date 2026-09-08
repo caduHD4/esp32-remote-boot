@@ -13,3 +13,7 @@ agent.json
 config.local.*
 .env*
 firmware/include/web_asset.h
+
+# Native agent build outputs
+**/bin/
+**/obj/

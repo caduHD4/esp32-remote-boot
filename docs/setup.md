@@ -1,5 +1,7 @@
 # Instalação, atualização e recuperação
 
+Para o cliente residente, siga primeiro [Agent nativo C#](native-agent.md). Os installers atuais exigem o binário NativeAOT e iniciam C# via WebSocket. PowerShell/Bash abaixo são ferramentas de instalação e recuperação, não o processo residente. HTTP heartbeat permanece só para clientes legados.
+
 Siga README para onboarding. A primeira sincronização pode ocorrer em apenas um OS; instale agent em cada OS que deseja identificar/reiniciar. Linux requer systemd; a descoberta/API não depende de Python. `jq` é dependência explícita.
 
 Configure padrão e fallback antes do primeiro BootNext. Nenhum ID é escolhido automaticamente. A opção `exit_to_firmware` deixa a política do boot físico para o firmware e precisa ser testada na máquina.

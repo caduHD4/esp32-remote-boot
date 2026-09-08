@@ -15,11 +15,12 @@ public static class Firmware {
     [DllImport("advapi32.dll",SetLastError=true)] static extern bool AdjustTokenPrivileges(IntPtr token,bool disable,ref TokenPrivileges state,uint size,IntPtr previous,IntPtr needed);
     [StructLayout(LayoutKind.Sequential)] struct Luid { public uint Low; public int High; }
     [StructLayout(LayoutKind.Sequential)] struct TokenPrivileges { public uint Count; public Luid Luid; public uint Attributes; }
-    public static void Enable() {
+    public static void Enable() { EnablePrivilege("SeSystemEnvironmentPrivilege"); }
+    public static void EnablePrivilege(string privilege) {
         IntPtr token;
         if(!OpenProcessToken(GetCurrentProcess(),0x28,out token)) throw new Win32Exception();
         try {
-            Luid luid; if(!LookupPrivilegeValue(null,"SeSystemEnvironmentPrivilege",out luid)) throw new Win32Exception();
+            Luid luid; if(!LookupPrivilegeValue(null,privilege,out luid)) throw new Win32Exception();
             var state=new TokenPrivileges{Count=1,Luid=luid,Attributes=2};
             if(!AdjustTokenPrivileges(token,false,ref state,0,IntPtr.Zero,IntPtr.Zero)) throw new Win32Exception();
             int error=Marshal.GetLastWin32Error(); if(error!=0) throw new Win32Exception(error);

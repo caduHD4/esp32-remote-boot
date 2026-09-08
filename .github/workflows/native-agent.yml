@@ -1,0 +1,42 @@
+name: Native agent
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            rid: linux-x64
+            executable: remote-boot-agent
+          - os: windows-2022
+            rid: win-x64
+            executable: remote-boot-agent.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Publish NativeAOT
+        run: dotnet publish agent/native/RemoteBoot.Agent.csproj -c Release -r ${{ matrix.rid }} -o build/agent/${{ matrix.rid }}
+      - name: Test native binary (no real power actions)
+        shell: pwsh
+        run: |
+          & "./build/agent/${{ matrix.rid }}/${{ matrix.executable }}" --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Native tests failed' }
+          Get-FileHash "./build/agent/${{ matrix.rid }}/${{ matrix.executable }}" -Algorithm SHA256 | Format-List | Out-File "./build/agent/${{ matrix.rid }}/SHA256.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.rid }}
+          path: |
+            build/agent/${{ matrix.rid }}/${{ matrix.executable }}
+            build/agent/${{ matrix.rid }}/SHA256.txt

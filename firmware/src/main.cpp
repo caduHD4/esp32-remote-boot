@@ -5,6 +5,7 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
+#include <WebSocketsServer.h>
 #include <SinricPro.h>
 #include <SinricProSwitch.h>
 #include "boot_state.hpp"
@@ -12,7 +13,7 @@
 #include "config_policy.hpp"
 #include "web_asset.h"
 
-constexpr char Version[]="2.0.1-experimental";
+constexpr char Version[]="2.1.0-experimental";
 WebServer server(80); DNSServer dns; WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
 bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
@@ -22,6 +23,13 @@ uint32_t logIndex=0,restartAt=0,lastWol=0,wolAt=0,wifiLostAt=0;
 uint8_t wolRemaining=0; bool wolSent=false;
 String slotIds[8]; uint32_t slotReset[8]{};
 uint32_t discoveryGeneration=1;
+WebSocketsServer agentSocket(81);
+int socketAgent=-1;
+uint32_t socketOpened[WEBSOCKETS_SERVER_CLIENT_MAX]{};
+bool socketWaiting[WEBSOCKETS_SERVER_CLIENT_MAX]{};
+String socketSentCommand;
+uint32_t socketDiscovery=0;
+
 
 String idText(int id) { if(id<0) return ""; char b[5]; snprintf(b,sizeof b,"%04X",id); return b; }
 int idValue(JsonVariantConst v) { int id=-1; rb::parseId(v.as<const char*>(),id); return id; }
@@ -149,6 +157,7 @@ void routes() {
         d["version"]=Version; d["setup_mode"]=setupMode; d["config_locked"]=locked; d["online"]=state.online(millis());
         d["os"]=osName; d["hostname"]=hostName; d["ip"]=WiFi.localIP().toString(); d["rssi"]=WiFi.RSSI();
         d["sinric_online"]=sinricOnline; d["uptime"]=millis()/1000; d["heap"]=ESP.getFreeHeap();
+        d["agent_transport"]=socketAgent>=0?"websocket":"http-legacy";
         d["reboot_enabled"]=agentRebootEnabled && state.online(millis());
         d["shutdown_enabled"]=agentShutdownEnabled && agentSession.length()>=16 && state.online(millis());
         d["pending_target"]=idText(state.pendingValid(millis())?state.pending:-1); d["default_target"]=idText(state.defaultTarget);
@@ -202,7 +211,9 @@ void routes() {
         if(!powerCommand.enqueue(randomToken().c_str(),"reboot",idText(id).c_str(),agentSession.c_str(),millis())) { errorReply(409,"COMMAND_PENDING"); return; }
         d.clear(); d["queued"]=true; jsonReply(202,d);
     });
-    server.on("/api/v1/heartbeat",HTTP_POST,[]{ if(!auth(true)) return; JsonDocument d; if(!body(d)) return;
+    server.on("/api/v1/heartbeat",HTTP_POST,[]{ if(!auth(true)) return;
+        if(socketAgent>=0) { errorReply(409,"WEBSOCKET_AGENT_ACTIVE"); return; }
+        state.heartbeatExpiry=45000; JsonDocument d; if(!body(d)) return;
         hostName=String(d["hostname"]|"").substring(0,63); osName=String(d["os"]|"").substring(0,63);
         state.heartbeat(millis(),idValue(d["boot_id"]));
         agentRebootEnabled=d["reboot_enabled"]|false;
@@ -218,6 +229,75 @@ void routes() {
     server.on("/api/v1/system/reboot",HTTP_POST,[]{ if(!auth()) return; JsonDocument d; d["restarting"]=true; jsonReply(202,d); restartAt=millis()+1000; });
     server.on("/api/v1/system/reset",HTTP_POST,[]{ if(!auth()) return; JsonDocument d; if(!body(d)) return; if(String(d["confirm"]|"")!="FACTORY_RESET") { errorReply(400,"CONFIRM_REQUIRED"); return; } if(!nvs.clear()) { errorReply(500,"NVS_WRITE_FAILED"); return; } d.clear(); d["reset"]=true; jsonReply(200,d); restartAt=millis()+1000; });
     server.onNotFound([]{ errorReply(404,"NOT_FOUND"); }); server.begin();
+}
+void socketReply(uint8_t num,JsonDocument& d) {
+    String data; serializeJson(d,data); agentSocket.sendTXT(num,data);
+}
+void startAgentSocket() {
+    agentSocket.begin(); agentSocket.enableHeartbeat(60000,15000,2);
+    agentSocket.onEvent([](uint8_t num,WStype_t type,uint8_t* payload,size_t length) {
+        if(num>=WEBSOCKETS_SERVER_CLIENT_MAX) return;
+        if(type==WStype_CONNECTED) {
+            socketWaiting[num]=true; socketOpened[num]=millis();
+            if(length!=6||memcmp(payload,"/agent",6)!=0) agentSocket.disconnect(num);
+            return;
+        }
+        if(type==WStype_DISCONNECTED) {
+            socketWaiting[num]=false;
+            if(socketAgent==num) {
+                socketAgent=-1; powerCommand.clear(); socketSentCommand=""; agentSession="";
+                agentShutdownEnabled=false; agentRebootEnabled=false; state.heartbeatSeen=false;
+                logEvent("AGENT_DISCONNECTED");
+            }
+            return;
+        }
+        if(type==WStype_PONG) {
+            if(socketAgent==num)state.heartbeatAt=millis();
+            return;
+        }
+        if(type==WStype_PING) return;
+        if(type!=WStype_TEXT||length>12000) { agentSocket.disconnect(num); return; }
+        JsonDocument d;
+        if(deserializeJson(d,payload,length)||!d.is<JsonObject>()) { agentSocket.disconnect(num); return; }
+        String kind=d["type"]|"";
+        if(socketAgent!=num) {
+            String session=d["session_id"]|"";
+            bool validSession=session.length()==32;
+            for(char ch:session) if(!isxdigit(ch))validSession=false;
+            if(socketAgent>=0||kind!="hello"||locked||setupMode||!validSession||
+               !rb::tokenEqual(d["token"]|"",config["agent_token"]|"")) { agentSocket.disconnect(num); return; }
+            socketAgent=num;socketWaiting[num]=false;socketSentCommand="";powerCommand.clear();
+            agentSession=session;agentShutdownEnabled=d["shutdown_enabled"]|false;agentRebootEnabled=d["reboot_enabled"]|false;
+            hostName=String(d["hostname"]|"").substring(0,63);osName=String(d["os"]|"").substring(0,63);
+            state.heartbeatExpiry=90000;state.heartbeat(millis(),idValue(d["boot_id"]));
+            socketDiscovery=discoveryGeneration;
+            d.clear();d["type"]="ready";d["session_id"]=agentSession;socketReply(num,d);logEvent("AGENT_CONNECTED");
+        } else if(kind=="ack") {
+            String id=d["id"]|""; bool accepted=false;
+            if(String(d["session_id"]|"")==agentSession) {
+                if(powerCommand.action=="reboot"&&!agentRebootEnabled)powerCommand.clear();
+                accepted=powerCommand.heartbeat(agentSession.c_str(),id.c_str(),agentShutdownEnabled,millis());
+            }
+            d.clear();d["type"]="ack";d["id"]=id;d["session_id"]=agentSession;d["accepted"]=accepted;socketReply(num,d);
+            logEvent(accepted?"POWER_ACK_ACCEPTED":"POWER_ACK_REJECTED");
+        } else if(kind=="result")logEvent(d["requested"].as<bool>()?"OS_POWER_REQUESTED":"OS_POWER_REFUSED");
+        else agentSocket.disconnect(num);
+    });
+}
+void agentSocketTick() {
+    agentSocket.loop();
+    for(uint8_t num=0;num<WEBSOCKETS_SERVER_CLIENT_MAX;++num)
+        if(socketWaiting[num]&&uint32_t(millis()-socketOpened[num])>=5000)agentSocket.disconnect(num);
+    if(socketAgent<0) return;
+    if(!state.online(millis())) { agentSocket.disconnect(socketAgent);return; }
+    if(powerCommand.active(millis())&&socketSentCommand!=powerCommand.id.c_str()) {
+        JsonDocument d;d["type"]="command";d["id"]=powerCommand.id.c_str();d["action"]=powerCommand.action.c_str();
+        d["boot_id"]=powerCommand.target.c_str();d["session_id"]=agentSession;
+        socketReply(socketAgent,d);socketSentCommand=powerCommand.id.c_str();
+    }
+    if(socketDiscovery!=discoveryGeneration) {
+        JsonDocument d;d["type"]="discover";socketReply(socketAgent,d);socketDiscovery=discoveryGeneration;
+    }
 }
 void startSinric() {
     if(!config["sinric_enabled"].as<bool>()||setupMode||locked) return;
@@ -258,10 +338,10 @@ void setup() {
         uint32_t start=millis(); while(WiFi.status()!=WL_CONNECTED&&millis()-start<20000) delay(50);
     }
     if(WiFi.status()!=WL_CONNECTED) setupAP();
-    routes(); startSinric(); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
+    routes(); startAgentSocket(); startSinric(); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
 }
 void loop() {
-    server.handleClient(); if(setupMode) dns.processNextRequest(); wolTick();
+    server.handleClient(); agentSocketTick(); if(setupMode) dns.processNextRequest(); wolTick();
     if(sinricStarted) { SinricPro.handle(); for(int i=0;i<8;++i) if(slotReset[i]&&static_cast<int32_t>(millis()-slotReset[i])>=0) { SinricProSwitch& d=SinricPro[slotIds[i]]; d.sendPowerStateEvent(false); slotReset[i]=0; } }
     if(!setupMode) { if(WiFi.status()!=WL_CONNECTED) { if(!wifiLostAt) wifiLostAt=millis(); if(uint32_t(millis()-wifiLostAt)>60000) setupAP(); } else wifiLostAt=0; }
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);
