@@ -24,6 +24,18 @@ Fluxo principal: Sinric Pro → ESP32 → WoL → iPXE local → `/boot.ipxe` �
 7. Execute o installer do host e sincronize as entradas UEFI na dashboard. Mapeie dois Switches Sinric Pro: um para cada entrada. O fluxo guiado está em `docs/sinric.md`.
 8. Configure padrão/fallback na dashboard e teste cada Switch antes de promover a entrada Remote Boot no firmware.
 
+## Sinric Pro: passo a passo principal
+
+1. Acesse [portal.sinric.pro](https://portal.sinric.pro), crie uma conta e, em **Apps**, crie uma app, por exemplo `ESP32 Remote Boot`.
+2. Na área **Credentials** da app, copie **App Key** e **App Secret**. Nunca publique esses valores.
+3. Em **Devices**, crie dois dispositivos do tipo **Switch**: `PC Windows` e `PC Linux` (ou o nome da distribuição). Copie o **Device ID** de cada um.
+4. Vincule a conta Sinric Pro ao Alexa ou Google Home pelo fluxo oferecido no portal e execute a descoberta de dispositivos. Os dois Switches devem aparecer no assistente.
+5. Na dashboard da ESP32, em **Sinric**, marque **Ativar Sinric**, cole App Key/App Secret e adicione dois slots. Em cada slot, cole um Device ID e selecione o `Boot####` já testado para o sistema correspondente.
+6. Salve e aguarde a ESP32 reiniciar. O status deve indicar `Sinric online`.
+7. Com o PC desligado, teste `PC Windows` e `PC Linux` separadamente. Cada comando `ON` deve ligar o PC por WoL e iniciar apenas o `Boot####` mapeado.
+
+Não use `default` durante a validação inicial. Se um Switch iniciar o sistema errado, corrija apenas o mapeamento `Device ID → Boot####`; não altere o `BootOrder`. O guia detalhado, com recuperação e diagnóstico, está em [docs/sinric.md](docs/sinric.md).
+
 ## Linux
 
 Dependências básicas: Bash, `jq`, `curl`, `efibootmgr`, `util-linux`, `systemd`. Para construir: Git, GNU Make, GCC, binutils, GNU-EFI, Perl e headers de desenvolvimento usados pelo iPXE.
