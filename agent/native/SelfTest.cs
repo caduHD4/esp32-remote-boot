@@ -47,7 +47,9 @@ public static class SelfTest {
         try {
             var host=new FakeHost();
             var config=new Config{Url=new Uri("http://127.0.0.1:"+((IPEndPoint)httpListener.LocalEndpoint).Port),WsPort=((IPEndPoint)wsListener.LocalEndpoint).Port,Token=new string('x',24),AllowShutdown=true};
-            var clientTask=new Agent(config,host,path).ConnectOnce(token);
+            var clientTask=new Agent(config,host,path).Run(token);
+            string previousSession="";
+            for(int attempt=0;attempt<2;++attempt) {
             using var tcp=await wsListener.AcceptTcpClientAsync(token);var stream=tcp.GetStream();
             string header=await Header(stream,token),key="";
             foreach(string line in header.Split("\r\n"))if(line.StartsWith("Sec-WebSocket-Key:",StringComparison.OrdinalIgnoreCase))key=line.Substring(18).Trim();
@@ -55,20 +57,27 @@ public static class SelfTest {
             await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "+accept+"\r\nSec-WebSocket-Protocol: arduino\r\n\r\n"),token);
             using var socket=WebSocket.CreateFromStream(stream,true,"arduino",TimeSpan.Zero);
             using var hello=await Agent.Receive(socket,token);string session=Json.Text(hello.RootElement,"session_id");
-            Assert(Json.Text(hello.RootElement,"token")==config.Token&&session.Length==32);
+            Assert(Json.Text(hello.RootElement,"token")==config.Token&&session.Length==32&&session!=previousSession);
             await Send(socket,Json.Build(w=>{w.WriteString("type","ready");w.WriteString("session_id",session);}),token);
             await SyncResponse(httpListener,token);
-            using var command=Message("command",new string('b',32),session);
+            string commandId=new string(attempt==0?'b':'c',32);
+            if(attempt>0) {
+                using var stale=Message("command",new string('e',32),previousSession);
+                await Send(socket,Encoding.UTF8.GetBytes(stale.RootElement.GetRawText()),token);
+            }
+            using var command=Message("command",commandId,session);
             await Send(socket,Encoding.UTF8.GetBytes(command.RootElement.GetRawText()),token);
-            using var ack=await Agent.Receive(socket,token);Assert(Json.Text(ack.RootElement,"type")=="ack");Assert(host.Calls==0);
-            using var confirmation=Message("ack",new string('b',32),session);
+            using var ack=await Agent.Receive(socket,token);Assert(Json.Text(ack.RootElement,"type")=="ack"&&Json.Text(ack.RootElement,"id")==commandId);Assert(host.Calls==attempt);
+            using var confirmation=Message("ack",commandId,session);
             await Send(socket,Encoding.UTF8.GetBytes(confirmation.RootElement.GetRawText()),token);
-            using var result=await Agent.Receive(socket,token);Assert(Json.Bool(result.RootElement,"requested"));Assert(host.Calls==1);
+            using var result=await Agent.Receive(socket,token);Assert(Json.Bool(result.RootElement,"requested"));Assert(host.Calls==attempt+1);
             await Send(socket,Json.Build(w=>w.WriteString("type","discover")),token);
             await SyncResponse(httpListener,token);
             await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure,"done",token);
-            try{await clientTask;}catch(Exception){ }
-            Assert(host.Calls==1);Console.WriteLine("PASS: real WebSocket handshake, hello, event-driven discovery, command and ACK before simulated shutdown");
+            previousSession=session;
+            }
+            stop.Cancel();try{await clientTask;}catch(OperationCanceledException){ }
+            Assert(host.Calls==2);Console.WriteLine("PASS: real WebSocket handshake, discovery, reconnect/new session, stale-session rejection and ACK before simulated shutdown");
         } finally { wsListener.Stop();httpListener.Stop(); }
     }
     public static int Run() {

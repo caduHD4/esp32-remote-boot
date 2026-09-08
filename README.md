@@ -73,7 +73,7 @@ sudo pacman -S --needed base-devel binutils gnu-efi git perl xz jq curl efibootm
 sudo bash installer/linux/install.sh
 ```
 
-O installer mostra a ESP e faz backup antes de escrever. Cria a entrada com `--create-only`, preservando BootOrder. A opção `TEST` agenda um único boot; não reinicia o PC. A opção `AGENT` instala heartbeat e, se habilitado explicitamente, reboot remoto confirmado pela dashboard.
+O installer mostra a ESP e faz backup antes de escrever. Cria a entrada com `--create-only`, preservando BootOrder. A opção `TEST` agenda um único boot; não reinicia o PC. A opção `AGENT` instala o agent nativo WebSocket e, se habilitado explicitamente, reboot remoto confirmado pela dashboard.
 
 Após testar, `sudo bash installer/linux/promote.sh XXXX` pede confirmação para colocar a entrada em primeiro. `XXXX` é o ID mostrado pelo installer, nunca um valor fixo.
 
