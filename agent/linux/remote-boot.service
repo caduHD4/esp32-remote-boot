@@ -1,0 +1,14 @@
+[Unit]
+Description=Remote Boot heartbeat and UEFI discovery
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=/opt/remote-boot/agent.sh
+Restart=on-failure
+RestartSec=10
+UMask=0077
+ProtectHome=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+.pio/
+.cache/
+build/
+dist/
+__pycache__/
+*.o
+*.so
+*.efi
+*.bin
+*.zip
+*.log
+agent.json
+config.local.*
+.env*
+firmware/include/web_asset.h

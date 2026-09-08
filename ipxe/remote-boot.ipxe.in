@@ -1,0 +1,9 @@
+#!ipxe
+echo Remote Boot
+ifconf --configurator dhcp --timeout @TIMEOUT@ net0 || goto failed
+imgfetch --name selection --timeout @TIMEOUT@ http://@ESP@/boot.ipxe || goto failed
+imgexec selection || goto failed
+exit
+:failed
+echo Remote Boot network or loader failure
+exit 1

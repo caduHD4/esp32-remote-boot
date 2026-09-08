@@ -1,0 +1,24 @@
+{
+  "firmware": {
+    "bytes": 1027760,
+    "sha256": "bbfa40e29c411b40eaeb287f7ecb5c08f44b8a7cae02333fc23420ac8ad5763d"
+  },
+  "RemoteBoot.efi": {
+    "bytes": 58781,
+    "sha256": "f0609e9b0d4d57be4ef3c82086505f888e8cb59be9fd5fcfd611e12af28cf108"
+  },
+  "ipxe.efi_test_only": {
+    "bytes": 1233920,
+    "sha256": "fc2034a58f780b4923b625e067074fa37d8d8a471032c4d79371c39320d1877e"
+  },
+  "esp32_partition": {
+    "firmware_bytes": 1027760,
+    "app_bytes": 4128768,
+    "usage_percent": 24.89,
+    "ota": false
+  },
+  "static_ram_bytes": 44108,
+  "ipxe_embeds_efi_exact_bytes": true,
+  "hardware_validated": false,
+  "hosted_ci_run": false
+}

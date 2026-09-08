@@ -1,0 +1,24 @@
+name: Release build artifacts
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y gnu-efi liblzma-dev jq shellcheck
+      - run: pip install platformio==6.1.18
+      - run: bash tests/run.sh && pio run -e esp32c3_4mb && make -C uefi/remote-boot
+      - run: bash ipxe/build.sh 192.0.2.10
+      - run: python3 scripts/package_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/*

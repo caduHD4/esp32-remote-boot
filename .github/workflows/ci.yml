@@ -1,0 +1,40 @@
+name: CI
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y gnu-efi liblzma-dev shellcheck jq
+      - run: pip install platformio==6.1.18
+      - run: bash tests/run.sh
+      - run: find agent installer ipxe scripts tests -name '*.sh' -print0 | xargs -0 shellcheck -x
+      - run: pio run -e esp32c3_4mb
+      - run: bash tests/config.sh
+      - run: make -C uefi/remote-boot
+      - run: file uefi/remote-boot/RemoteBoot.efi | grep 'PE32+.*EFI application.*x86-64'
+      - run: bash ipxe/build.sh 192.0.2.10
+      - name: PowerShell syntax and C# tests
+        shell: pwsh
+        run: ./tests/powershell.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experimental-build
+          path: |
+            .pio/build/esp32c3_4mb/firmware.bin
+            .pio/build/esp32c3_4mb/bootloader.bin
+            .pio/build/esp32c3_4mb/partitions.bin
+            .pio/build/esp32c3_4mb/size-report.json
+            uefi/remote-boot/RemoteBoot.efi
+            build/SHA256SUMS
+  windows-syntax:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - shell: powershell
+        run: ./tests/powershell.ps1

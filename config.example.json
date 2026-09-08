@@ -1,0 +1,14 @@
+{
+  "ssid": "EXAMPLE_WIFI",
+  "wifi_password": "",
+  "admin_token": "REPLACE_WITH_RANDOM_ADMIN_TOKEN",
+  "agent_token": "REPLACE_WITH_RANDOM_AGENT_TOKEN",
+  "mac": "02:00:00:00:00:01",
+  "dhcp": true,
+  "default_target": "0001",
+  "fallback_boot_id": "0002",
+  "systems": [
+    {"id":"0001","name":"Example loader A","hidden":false,"blocked":false},
+    {"id":"0002","name":"Example loader B","hidden":false,"blocked":false}
+  ]
+}
