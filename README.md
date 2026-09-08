@@ -1,10 +1,10 @@
 # ESP32 Remote Boot V2
 
-Escolha uma entrada UEFI pela dashboard ou por um Switch Sinric Pro e ligue o PC por Wake-on-LAN. A seleção usa `Boot####`, sem nomes de sistemas fixos.
+Ligue o PC e escolha o próximo sistema por voz com Sinric Pro: um Switch aciona Windows e outro Linux. A ESP32 grava o target, envia Wake-on-LAN e o boot UEFI local carrega a entrada `Boot####` selecionada. Não há nomes de sistemas fixos no firmware.
 
 **Experimental: builds e testes de software não equivalem a validação da V2 na placa/PC.** Consulte `IMPLEMENTATION_REPORT.md` e `docs/hardware-test.md` antes de instalar.
 
-O fluxo preservado é ESP32 → WoL → iPXE local → `/boot.ipxe` → `RemoteBoot.efi` embutido → loader EFI local. A UKI é opcional. O PC precisa de Ethernet com WoL; a ESP32 usa Wi-Fi na mesma rede/broadcast.
+Fluxo principal: Sinric Pro → ESP32 → WoL → iPXE local → `/boot.ipxe` → `RemoteBoot.efi` embutido → loader EFI local. A UKI é opcional. O PC precisa de Ethernet com WoL; a ESP32 usa Wi-Fi na mesma rede/broadcast. Dashboard e agents ampliam o controle, mas não substituem o fluxo Sinric.
 
 ## Primeiro uso
 
@@ -21,7 +21,8 @@ O fluxo preservado é ESP32 → WoL → iPXE local → `/boot.ipxe` → `RemoteB
 4. Abra `http://192.168.4.1`, conecte usando esse token e configure SSID, senha Wi-Fi, MAC Ethernet e dois tokens **diferentes**, com 24–128 caracteres ASCII de `A–Z`, `a–z`, `0–9`, `_`, `-`. Gere-os com `python -c "import secrets; print(secrets.token_hex(24))"`. Guarde-os.
 5. Salve, reconecte à LAN e abra o IP da ESP32 com o token administrativo. Reserve o IP no DHCP. O endereço é embutido no build iPXE e não deve mudar.
 6. Configure UEFI/WoL seguindo `docs/bios.md`, `docs/linux-wol.md` e `docs/windows-wol.md`.
-7. Execute o installer do host. Configure sistema padrão/fallback na dashboard após a primeira sincronização e antes do teste.
+7. Execute o installer do host e sincronize as entradas UEFI na dashboard. Mapeie dois Switches Sinric Pro: um para cada entrada. O fluxo guiado está em `docs/sinric.md`.
+8. Configure padrão/fallback na dashboard e teste cada Switch antes de promover a entrada Remote Boot no firmware.
 
 ## Linux
 
@@ -70,7 +71,7 @@ Não execute o installer Linux no WSL para alterar o firmware do host Windows: u
 - PC online: boot comum retorna `409 PC_ALREADY_ON`. “Forçar WoL” só envia o pacote; não reinicia.
 - “Reiniciar neste sistema” exige confirmação e agent habilitado. O agent agenda diretamente `BootNext` para o target.
 - Heartbeat a cada 12 segundos; offline após 45 segundos sem heartbeat.
-- Sinric: configure até 8 Switch IDs reais no portal e mapeie cada um para um Boot ID ou `default`. A dashboard permanece a interface completa.
+- Sinric: é a integração principal de Wake-on-LAN dual boot. Configure dois Switch IDs reais, um para cada Boot ID; até 8 slots são suportados. A dashboard permanece a interface completa.
 
 ## Build e testes
 
@@ -85,7 +86,7 @@ bash ipxe/build.sh 192.0.2.10
 
 Em Linux que usa ptrace e impede LeakSanitizer: `ASAN_OPTIONS=detect_leaks=0 bash tests/run.sh` mantém AddressSanitizer/UBSan, mas não valida leaks.
 
-Os workflows estão em `.github/workflows`. Para trabalhar localmente, clone o repositório, revise os arquivos e crie commits normalmente.
+Os workflows estão em `.github/workflows`. Não foi feito push/publicação. Para subir manualmente, revise arquivos e execute `git init`, `git add .`, `git commit -m "Initial public release"`.
 
 ## Documentação
 
@@ -94,7 +95,7 @@ Os workflows estão em `.github/workflows`. Para trabalhar localmente, clone o r
 - [API](docs/api.md)
 - [Dashboard](docs/dashboard.md)
 - [Descoberta UEFI](docs/uefi-discovery.md)
-- [Sinric](docs/sinric.md)
+- [Sinric Pro: fluxo principal](docs/sinric.md)
 - [UKI opcional](docs/uki.md)
 - [Teste em hardware](docs/hardware-test.md)
 - [Troubleshooting](docs/troubleshooting.md)
