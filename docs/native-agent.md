@@ -4,11 +4,14 @@ A partir do firmware 2.1, o cliente principal é C# compilado em NativeAOT. O me
 
 ## Obter os binários
 
-1. Abra **Actions → Native agent** neste repositório.
-2. Escolha uma execução bem-sucedida referente à versão que você baixou.
-3. Baixe `agent-win-x64` e/ou `agent-linux-x64` em **Artifacts** (repositório privado exige login e acesso).
-4. Extraia o arquivo e confira o hash SHA256 fornecido junto dele. Os artifacts têm prazo de retenção do GitHub; execute novamente o workflow se expirarem.
-5. No Linux, marque o executável com `chmod +x remote-boot-agent`.
+1. Abra [Releases](https://github.com/caduHD4/esp32-remote-boot/releases) e escolha a versão desejada.
+2. Em **Assets**, baixe `remote-boot-agent-win-x64.exe` (Windows) ou `remote-boot-agent-linux-x64` (Linux), além de `SHA256SUMS`.
+3. Baixe também **Source code (zip)** da mesma versão e extraia para obter os installers/documentação.
+4. Compare o hash com `Get-FileHash ARQUIVO -Algorithm SHA256` no Windows ou `sha256sum ARQUIVO` no Linux.
+5. No Linux, aplique `chmod +x remote-boot-agent-linux-x64`.
+6. Informe o caminho e nome do executável baixado ao installer com os argumentos abaixo. Não precisa renomeá-lo.
+
+O repositório privado exige login e permissão de acesso para baixar os assets. Releases não seguem o prazo de expiração dos artifacts de Actions. A versão inicial é marcada como pré-release experimental. Builds de desenvolvimento continuam em **Actions → Native agent → Artifacts**.
 
 Para compilar por conta própria, instale .NET SDK 10 e os [pré-requisitos NativeAOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/). Compile Windows em Windows, Linux em Linux:
 
@@ -73,3 +76,7 @@ Linux: `systemctl status remote-boot` e `journalctl -u remote-boot -n 50`. Windo
 ## Limites de validação
 
 Os testes usam sockets TCP/WebSocket reais e comandos de energia simulados; verificam permissão, sessão, ACK, duplicação e descoberta por evento. O workflow publica e testa binários NativeAOT para cada sistema. Consulte o resultado da execução específica antes de baixar. Não há medição em seu hardware de RAM/CPU/FPS, nem validação física de UEFI/shutdown/Sinric. NativeAOT evita runtime externo; não significa consumo zero.
+
+## Publicar outra versão (mantenedor)
+
+Atualize `Version` no firmware para a nova versão experimental e faça o commit na branch desejada. Em **Actions → Publish release → Run workflow**, selecione essa branch. O workflow recompila/testa Windows e Linux, cria a tag correspondente e publica executáveis e hashes como pré-release. Versões existentes não são sobrescritas. A criação inicial também é disparada ao integrar o PR que adiciona esse workflow.
