@@ -36,6 +36,25 @@ Fluxo principal: Sinric Pro → ESP32 → WoL → iPXE local → `/boot.ipxe` �
 
 Não use `default` durante a validação inicial. Se um Switch iniciar o sistema errado, corrija apenas o mapeamento `Device ID → Boot####`; não altere o `BootOrder`. O guia detalhado, com recuperação e diagnóstico, está em [docs/sinric.md](docs/sinric.md).
 
+## Agent nativo C# (Windows e Linux)
+
+O cliente principal usa **C# NativeAOT + WebSocket persistente**. Recebe comandos por evento, sem polling HTTP de 12 s. Não exige .NET instalado; há executáveis separados para Windows x64 e Linux x64. Keepalive de 60 s e reconexão continuam necessários.
+
+Antes de instalar o agent, baixe os artifacts **agent-win-x64** / **agent-linux-x64** em **Actions → Native agent**, de uma execução bem-sucedida, ou compile o código. Atualize a ESP32 para firmware 2.1. O [guia do agent nativo](docs/native-agent.md) mostra build, download, instalação e migração completos.
+
+```bash
+# Linux: marque o binário baixado como executável e instale
+chmod +x /caminho/remote-boot-agent
+sudo bash installer/linux/install-agent.sh SEU_IP_DA_ESP32 /caminho/remote-boot-agent
+```
+
+```powershell
+# Windows: PowerShell elevado apenas durante a instalação
+.\installer\windows\install-agent.ps1 -EspAddress 'SEU_IP_DA_ESP32' -AgentFile 'C:\caminho\remote-boot-agent.exe'
+```
+
+Substitua os placeholders e informe o **agent token**. Digite `SHUTDOWN` e/ou `REBOOT` para autorizar cada ação. Linux usa systemd; Windows inicia o `.exe` diretamente pelo Task Scheduler como SYSTEM. O cliente não abre porta no PC. Linux ainda usa bibliotecas nativas do OS e ferramentas `efibootmgr`/`systemctl` quando necessário. Consumo real ainda não foi medido.
+
 ## Linux
 
 Dependências básicas: Bash, `jq`, `curl`, `efibootmgr`, `util-linux`, `systemd`. Para construir: Git, GNU Make, GCC, binutils, GNU-EFI, Perl e headers de desenvolvimento usados pelo iPXE.
@@ -93,14 +112,14 @@ sudo bash installer/linux/install-agent.sh
 
 Informe o IP reservado/token do agent e atualize também o firmware ESP32. Na dashboard, use **Desligar PC** e confirme. No Sinric, crie um Switch **Desligar PC**, adicione seu Device ID e mapeie para **Desligar PC (agent)**. Enviar **ON** a esse Switch desliga o OS que estiver rodando; **OFF não faz nada**. Para dizer “desligar computador”, use uma rotina do assistente que acione esse Switch com ON.
 
-O cliente consulta a ESP32 a cada 12 segundos, sem abrir porta no PC. Usa Bash/systemd no Linux e Windows PowerShell no Windows. Shutdown é normal, sem modo forçado; salve o trabalho. Consumo e shutdown físico ainda não foram medidos/testados. Veja [instalação, uso e diagnóstico completos](docs/shutdown.md).
+O cliente C# recebe comandos por WebSocket, sem consultas periódicas de comandos. A instalação nativa está descrita acima. Shutdown é normal, sem modo forçado; salve o trabalho. Consumo e shutdown físico ainda não foram medidos/testados. Veja [instalação, uso e diagnóstico completos](docs/shutdown.md).
 
 ## Uso
 
 - Dashboard: botões de boot, visibilidade/ordem das entradas, rede, WoL, padrão, fallback, comportamento do botão físico do **PC**, TTL e Sinric.
 - PC online: boot comum retorna `409 PC_ALREADY_ON`. “Forçar WoL” só envia o pacote; não reinicia.
 - “Reiniciar neste sistema” exige confirmação e agent habilitado. O agent agenda diretamente `BootNext` para o target.
-- Heartbeat a cada 12 segundos; offline após 45 segundos sem heartbeat.
+- Agent nativo: WebSocket com keepalive de 60 s; queda detectada encerra a sessão. Cliente HTTP legado: intervalo de 12 s e timeout de 45 s, apenas para compatibilidade.
 - Sinric: é a integração principal de Wake-on-LAN dual boot. Configure dois Switch IDs reais, um para cada Boot ID; até 8 slots são suportados. A dashboard permanece a interface completa.
 
 ## Build e testes

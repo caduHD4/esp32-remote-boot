@@ -1,10 +1,10 @@
 [Unit]
-Description=Remote Boot heartbeat and UEFI discovery
+Description=Remote Boot native WebSocket agent
 After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-ExecStart=/opt/remote-boot/agent.sh
+ExecStart=/opt/remote-boot/remote-boot-agent --config /etc/remote-boot/agent.json
 Restart=on-failure
 RestartSec=10
 UMask=0077
