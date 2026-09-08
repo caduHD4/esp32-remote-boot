@@ -59,6 +59,10 @@ Não mapeie um Switch a `default` enquanto ainda estiver validando os dois siste
 
 A implementação usa `SinricProSwitch`, `onPowerState`, `sendPowerStateEvent` e `SinricPro.begin` do SDK 3.3.1. Não cria dispositivos no portal nem inventa enumeração de modes. O limite local de oito slots não promete oito dispositivos gratuitos: plano/limites da conta são separados.
 
-ON enfileira boot; OFF não desliga o PC. Após o evento aceito, o Switch é devolvido para OFF. Pedido com PC online é rejeitado. Após edição de credenciais/slots, salvar reinicia o ESP32 para registrar os callbacks atualizados.
+ON enfileira boot nos slots de sistema ou shutdown no slot `shutdown`; OFF não desliga o PC. Após o evento aceito, o Switch é devolvido para OFF. Pedido com PC online é rejeitado. Após edição de credenciais/slots, salvar reinicia o ESP32 para registrar os callbacks atualizados.
 
 Fonte: [SDK SinricPro 3.3.1](https://github.com/sinricpro/esp8266-esp32-sdk/tree/3.3.1). Integração cloud não validada nesta execução.
+
+## Switch dedicado de shutdown
+
+Para desligar o Windows ou Linux, instale o agent atualizado nos dois sistemas e habilite `SHUTDOWN` no installer. Crie um Switch **Desligar PC** e mapeie seu Device ID para **Desligar PC (agent)** na dashboard. Envie **ON** para ele; o evento OFF permanece sem ação. Para usar a frase “desligar computador”, configure uma rotina do assistente para ligar esse Switch. Veja o [passo a passo de shutdown](shutdown.md), incluindo permissões e diagnóstico.

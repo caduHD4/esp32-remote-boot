@@ -69,13 +69,6 @@ read -r -p 'Set BootNext for a one-time test? Type TEST: ' answer
 if [[ $answer == TEST ]]; then efibootmgr --bootnext "$existing"; fi
 read -r -p 'Install heartbeat agent? Type AGENT: ' answer
 if [[ $answer == AGENT ]]; then
-    read -r -s -p 'Agent token from dashboard: ' agent_token; printf '\n'
-    read -r -p 'Allow dashboard-confirmed reboot commands? Type REBOOT to enable: ' allow
-    allow_json=false; [[ $allow != REBOOT ]] || allow_json=true
-    mkdir -p /opt/remote-boot /etc/remote-boot /var/lib/remote-boot
-    install -m 755 "$root/agent/linux/agent.sh" "$root/agent/linux/common.sh" /opt/remote-boot/
-    jq -n --arg url "$RB_URL" --arg token "$agent_token" --argjson allow "$allow_json" '{url:$url,token:$token,allow_reboot:$allow}' > /etc/remote-boot/agent.json
-    install -m 644 "$root/agent/linux/remote-boot.service" /etc/systemd/system/
-    systemctl daemon-reload; systemctl enable --now remote-boot.service
+    bash "$root/installer/linux/install-agent.sh" "$esp"
 fi
 printf 'No reboot performed. Test manually, then run installer/linux/promote.sh %s after confirming successful boot.\n' "$existing"

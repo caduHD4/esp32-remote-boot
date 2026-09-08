@@ -77,6 +77,24 @@ Em PowerShell elevado, na raiz do repositório:
 
 Não execute o installer Linux no WSL para alterar o firmware do host Windows: use WSL somente para o build. O installer Windows mostra as ESPs, exporta o estado e pede confirmação antes da escrita. Após o teste, use `installer/windows/promote.ps1 -BootId XXXX`. Política de execução corporativa permanece sob controle do administrador; os scripts não a alteram.
 
+## Shutdown remoto (Windows e Linux)
+
+O mesmo agent recebe desligamento pela dashboard e por um Switch Sinric dedicado. Instale/atualize o agent em cada sistema e habilite a permissão `SHUTDOWN`:
+
+```bash
+# Linux UEFI com systemd
+sudo bash installer/linux/install-agent.sh
+```
+
+```powershell
+# Windows PowerShell como administrador
+.\installer\windows\install-agent.ps1 -EspAddress 'SEU_IP_DA_ESP32'
+```
+
+Informe o IP reservado/token do agent e atualize também o firmware ESP32. Na dashboard, use **Desligar PC** e confirme. No Sinric, crie um Switch **Desligar PC**, adicione seu Device ID e mapeie para **Desligar PC (agent)**. Enviar **ON** a esse Switch desliga o OS que estiver rodando; **OFF não faz nada**. Para dizer “desligar computador”, use uma rotina do assistente que acione esse Switch com ON.
+
+O cliente consulta a ESP32 a cada 12 segundos, sem abrir porta no PC. Usa Bash/systemd no Linux e Windows PowerShell no Windows. Shutdown é normal, sem modo forçado; salve o trabalho. Consumo e shutdown físico ainda não foram medidos/testados. Veja [instalação, uso e diagnóstico completos](docs/shutdown.md).
+
 ## Uso
 
 - Dashboard: botões de boot, visibilidade/ordem das entradas, rede, WoL, padrão, fallback, comportamento do botão físico do **PC**, TTL e Sinric.
@@ -98,7 +116,7 @@ bash ipxe/build.sh 192.0.2.10
 
 Em Linux que usa ptrace e impede LeakSanitizer: `ASAN_OPTIONS=detect_leaks=0 bash tests/run.sh` mantém AddressSanitizer/UBSan, mas não valida leaks.
 
-Os workflows estão em `.github/workflows`. Não foi feito push/publicação. Para subir manualmente, revise arquivos e execute `git init`, `git add .`, `git commit -m "Initial public release"`.
+Os workflows estão em `.github/workflows`. Para trabalhar localmente, clone o repositório, revise os arquivos e crie commits normalmente.
 
 ## Documentação
 

@@ -8,15 +8,17 @@
 #include <SinricPro.h>
 #include <SinricProSwitch.h>
 #include "boot_state.hpp"
+#include "power_command.hpp"
 #include "config_policy.hpp"
 #include "web_asset.h"
 
-constexpr char Version[]="2.0.0-experimental";
+constexpr char Version[]="2.0.1-experimental";
 WebServer server(80); DNSServer dns; WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
-bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false;
-String setupKey,osName,hostName,logs[32],rebootCommand,commandId;
-uint32_t logIndex=0,restartAt=0,commandAt=0,lastWol=0,wolAt=0,wifiLostAt=0;
+bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
+String setupKey,osName,hostName,logs[32],agentSession;
+rb::PowerCommand powerCommand;
+uint32_t logIndex=0,restartAt=0,lastWol=0,wolAt=0,wifiLostAt=0;
 uint8_t wolRemaining=0; bool wolSent=false;
 String slotIds[8]; uint32_t slotReset[8]{};
 uint32_t discoveryGeneration=1;
@@ -84,7 +86,7 @@ bool validate(JsonDocument& d) {
         for(char c:sid) if(!isxdigit(c)) return false;
         for(size_t j=0;j<i;++j) if(sid==slots[j]["device_id"].as<String>()) return false;
         String target=slots[i]["boot_id"]|"";
-        if(target!="default"&&!exists(idValue(slots[i]["boot_id"]))) return false;
+        if(target!="default"&&target!="shutdown"&&!exists(idValue(slots[i]["boot_id"]))) return false;
     }
     if(d["sinric_enabled"].as<bool>() && (strlen(d["sinric_app_key"]|"")<10 || strlen(d["sinric_app_secret"]|"")<10)) return false;
     return true;
@@ -109,6 +111,13 @@ int requestBoot(int target,bool force) {
     if(status!=202) return status;
     nvs.putInt("last",state.lastSelected);
     wolRemaining=config["wol_repeat"]; wolAt=millis(); logEvent("BOOT_QUEUED"); return 202;
+}
+int requestShutdown() {
+    if(locked||setupMode) return 503;
+    if(!state.online(millis())) return 409;
+    if(!agentShutdownEnabled || agentSession.length()<16) return 403;
+    if(!powerCommand.enqueue(randomToken().c_str(),"shutdown","",agentSession.c_str(),millis())) return 409;
+    state.pending=rb::None; wolRemaining=0; logEvent("SHUTDOWN_QUEUED"); return 202;
 }
 void wolTick() {
     if(!wolRemaining||static_cast<int32_t>(millis()-wolAt)<0) return;
@@ -141,6 +150,7 @@ void routes() {
         d["os"]=osName; d["hostname"]=hostName; d["ip"]=WiFi.localIP().toString(); d["rssi"]=WiFi.RSSI();
         d["sinric_online"]=sinricOnline; d["uptime"]=millis()/1000; d["heap"]=ESP.getFreeHeap();
         d["reboot_enabled"]=agentRebootEnabled && state.online(millis());
+        d["shutdown_enabled"]=agentShutdownEnabled && agentSession.length()>=16 && state.online(millis());
         d["pending_target"]=idText(state.pendingValid(millis())?state.pending:-1); d["default_target"]=idText(state.defaultTarget);
         d["last_selected_target"]=idText(state.lastSelected); d["pending_created_at_ms"]=state.created; d["pending_ttl_s"]=state.ttl/1000;
         jsonReply(200,d);
@@ -168,7 +178,7 @@ void routes() {
         next["systems"]=list;
         auto exists=[&](int id){ for(JsonObject e:list) if(idValue(e["id"])==id&&!e["blocked"].as<bool>()) return true; return false; };
         for(const char* k:{"default_target","fallback_boot_id"}) if(!exists(idValue(next[k]))) next[k]="";
-        JsonArray slots=next["sinric_slots"].as<JsonArray>(); for(int i=int(slots.size())-1;i>=0;--i) if(String(slots[i]["boot_id"]|"")!="default"&&!exists(idValue(slots[i]["boot_id"]))) slots.remove(i);
+        JsonArray slots=next["sinric_slots"].as<JsonArray>(); for(int i=int(slots.size())-1;i>=0;--i) if(String(slots[i]["boot_id"]|"")!="default"&&String(slots[i]["boot_id"]|"")!="shutdown"&&!exists(idValue(slots[i]["boot_id"]))) slots.remove(i);
         if(!validate(next)) { errorReply(400,"INVALID_CATALOG"); return; }
         String before,after; serializeJson(config,before); serializeJson(next,after);
         if(before!=after&&!persist(next)) { errorReply(500,"NVS_WRITE_FAILED"); return; }
@@ -180,21 +190,28 @@ void routes() {
         d.clear(); d["queued"]=true; jsonReply(202,d);
     });
     server.on("/api/v1/discovery/request",HTTP_POST,[]{ if(!auth()) return; ++discoveryGeneration; JsonDocument d; d["generation"]=discoveryGeneration; jsonReply(202,d); });
+    server.on("/api/v1/shutdown",HTTP_POST,[]{ if(!auth()) return; JsonDocument d; if(!body(d)) return;
+        if(String(d["confirm"]|"")!="SHUTDOWN") { errorReply(400,"CONFIRM_REQUIRED"); return; }
+        int code=requestShutdown(); if(code!=202) { errorReply(code,code==403?"AGENT_SHUTDOWN_DISABLED":code==409?"AGENT_OFFLINE_OR_COMMAND_PENDING":"SHUTDOWN_UNAVAILABLE"); return; }
+        d.clear(); d["queued"]=true; jsonReply(202,d);
+    });
     server.on("/api/v1/reboot",HTTP_POST,[]{ if(!auth()) return; JsonDocument d; if(!body(d)) return;
         int id=idValue(d["boot_id"]); if(!state.online(millis())) { errorReply(409,"AGENT_OFFLINE"); return; }
         if(!agentRebootEnabled) { errorReply(409,"AGENT_REBOOT_DISABLED"); return; }
         if(!state.valid(id)||String(d["confirm"]|"")!="REBOOT") { errorReply(400,"CONFIRM_AND_VALID_TARGET_REQUIRED"); return; }
-        if(rebootCommand.length()&&uint32_t(millis()-commandAt)<30000) { errorReply(409,"COMMAND_PENDING"); return; }
-        rebootCommand=idText(id); commandId=randomToken(); commandAt=millis(); d.clear(); d["queued"]=true; jsonReply(202,d);
+        if(!powerCommand.enqueue(randomToken().c_str(),"reboot",idText(id).c_str(),agentSession.c_str(),millis())) { errorReply(409,"COMMAND_PENDING"); return; }
+        d.clear(); d["queued"]=true; jsonReply(202,d);
     });
     server.on("/api/v1/heartbeat",HTTP_POST,[]{ if(!auth(true)) return; JsonDocument d; if(!body(d)) return;
         hostName=String(d["hostname"]|"").substring(0,63); osName=String(d["os"]|"").substring(0,63);
         state.heartbeat(millis(),idValue(d["boot_id"]));
         agentRebootEnabled=d["reboot_enabled"]|false;
-        if(String(d["ack"]|"")==commandId && commandId.length()) rebootCommand="";
-        if(uint32_t(millis()-commandAt)>=30000) rebootCommand="";
-        d.clear(); d["discovery_generation"]=discoveryGeneration;
-        if(rebootCommand.length()) { d["command"]["id"]=commandId; d["command"]["boot_id"]=rebootCommand; d["command"]["action"]="reboot"; }
+        agentShutdownEnabled=d["shutdown_enabled"]|false;
+        agentSession=String(d["session_id"]|"").substring(0,64);
+        bool accepted=powerCommand.heartbeat(agentSession.c_str(),d["ack"]|"",agentShutdownEnabled,millis());
+        if(powerCommand.action=="reboot"&&!agentRebootEnabled) powerCommand.clear();
+        d.clear(); d["discovery_generation"]=discoveryGeneration; d["ack_accepted"]=accepted;
+        if(powerCommand.active(millis())) { d["command"]["id"]=powerCommand.id.c_str(); d["command"]["boot_id"]=powerCommand.target.c_str(); d["command"]["action"]=powerCommand.action.c_str(); d["command"]["session_id"]=powerCommand.session.c_str(); }
         jsonReply(200,d);
     });
     server.on("/api/v1/logs",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; auto arr=d["logs"].to<JsonArray>(); uint32_t n=logIndex<32?logIndex:32; for(uint32_t i=0;i<n;++i) arr.add(logs[(logIndex-n+i)%32]); jsonReply(200,d); });
@@ -213,6 +230,7 @@ void startSinric() {
             JsonObject slot=config["sinric_slots"][index];
             if(slot.isNull()||slotIds[index]!=slot["device_id"].as<String>()) return false;
             String target=slot["boot_id"]|"default";
+            if(target=="shutdown") { if(requestShutdown()!=202) return false; slotReset[index]=millis()+1000; return true; }
             int id=target=="default"?(state.pendingValid(millis())?state.pending:state.defaultTarget):idValue(slot["boot_id"]);
             if(requestBoot(id,false)!=202) return false; slotReset[index]=millis()+1000; return true;
         });

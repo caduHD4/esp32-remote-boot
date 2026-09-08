@@ -25,3 +25,11 @@ Pending TTL: 30–3.600 s, padrão 180. Heartbeat: 12 s; offline 45 s. WoL: port
 Schema/config: veja `config.example.json` para patch sanitizado; ele não contém credenciais utilizáveis. `default_target`, `fallback_boot_id` aceitam string vazia para nenhum. `physical_boot_behavior`: `default_target`, `last_selected`, `exit_to_firmware`. Sinric slots: `[{device_id:"ID_REAL",boot_id:"0001"}]` ou `boot_id:"default"`.
 
 Erros são `{error:"CODIGO"}`. 400 entrada inválida, 401/403 autenticação, 409 conflito, 413 corpo grande, 429 cooldown, 500 NVS, 503 indisponível. A API não garante que WoL acordou a máquina: 202 confirma apenas fila aceita.
+
+## Shutdown
+
+`POST /api/v1/shutdown`, token administrativo, body `{"confirm":"SHUTDOWN"}`. Retorna 202 com `queued: true` quando o agent está online, com sessão e shutdown habilitado. 400 exige confirmação, 403 indica permissão desabilitada, 409 indica agent offline ou comando pendente, 503 indica firmware indisponível/setup bloqueado.
+
+O heartbeat atualizado envia `session_id` (nonce novo por inicialização do processo) e `shutdown_enabled`. A resposta pode trazer `command: {id, action:"shutdown", boot_id:"", session_id}`. O agent persiste o ID, envia um novo heartbeat com `ack` e executa somente se a resposta tiver `ack_accepted: true`. A fila é única para reboot/shutdown, reside em RAM e expira em 30 segundos; sessão diferente ou permissão revogada cancelam shutdown. Não enviar comandos arbitrários de shell. Status inclui `shutdown_enabled` efetivo.
+
+Slots Sinric também aceitam `boot_id:"shutdown"`; ON solicita shutdown. OFF permanece sem ação para todos os slots. O ACK significa consumo autorizado do comando, não conclusão do shutdown físico.

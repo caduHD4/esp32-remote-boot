@@ -3,11 +3,16 @@ set -euo pipefail
 base=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=agent/linux/common.sh
 source "$base/common.sh"
+# shellcheck source=agent/linux/power.sh
+source "$base/power.sh"
 rb_require jq curl efibootmgr systemctl
 cfg=${1:-/etc/remote-boot/agent.json}
 [[ -r $cfg && -d /sys/firmware/efi ]] || exit 1
 RB_URL=$(jq -er .url "$cfg"); RB_TOKEN=$(jq -er .token "$cfg")
 allow_reboot=$(jq -r '.allow_reboot//false' "$cfg")
+allow_shutdown=$(jq -r '.allow_shutdown//false' "$cfg")
+session_id=$(cat /proc/sys/kernel/random/uuid)
+power_ack_path=/var/lib/remote-boot/ack
 generation=0; last_sync=0; ack=''; pending_ack=''
 if [[ -r /var/lib/remote-boot/ack ]]; then ack=$(cat /var/lib/remote-boot/ack); fi
 while true; do
@@ -15,12 +20,13 @@ while true; do
     uptime_s=$(cut -d. -f1 /proc/uptime)
     boot_id=$(efibootmgr | sed -n 's/^BootCurrent: //p')
     if ! rb_target_exists "$boot_id"; then boot_id=''; fi
-    payload=$(jq -cn --arg host "$(hostname)" --arg os "$os_name" --arg boot "$boot_id" --arg ack "$ack" --argjson uptime "$uptime_s" --argjson reboot "$allow_reboot" '{hostname:$host,os:$os,boot_id:$boot,uptime:$uptime,ack:$ack,reboot_enabled:$reboot}')
+    payload=$(jq -cn --arg host "$(hostname)" --arg os "$os_name" --arg boot "$boot_id" --arg ack "$ack" --argjson uptime "$uptime_s" --argjson reboot "$allow_reboot" --argjson shutdown "$allow_shutdown" --arg session "$session_id" '{hostname:$host,os:$os,boot_id:$boot,uptime:$uptime,ack:$ack,reboot_enabled:$reboot,shutdown_enabled:$shutdown,session_id:$session}')
     if reply=$(rb_api POST heartbeat "$payload"); then
         new_generation=$(jq -r '.discovery_generation//0' <<< "$reply")
         if [[ $generation != "$new_generation" ]] || ((SECONDS-last_sync>=300)); then
             if rb_api POST systems/sync "$(rb_catalog)" >/dev/null; then generation=$new_generation; last_sync=$SECONDS; fi
         fi
+        rb_shutdown_command "$reply" "$payload"
         command_id=$(jq -r '.command.id//empty' <<< "$reply")
         target=$(jq -r '.command.boot_id//empty' <<< "$reply")
         action=$(jq -r '.command.action//empty' <<< "$reply")

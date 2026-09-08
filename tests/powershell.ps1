@@ -11,3 +11,5 @@ $entry=[Firmware]::Parse(4,$b)
 if(-not $entry.blocked -or $entry.id -ne '0004'){throw 'Firmware parser failed'}
 try{[Firmware]::Parse(4,[byte[]]@(1,2,3));throw 'Accepted truncation'}catch{if($_.Exception.Message -eq 'Accepted truncation'){throw}}
 Write-Host 'PASS: PowerShell syntax and C# EFI serialization/parser'
+
+& (Join-Path $PSScriptRoot 'test_shutdown.ps1')
