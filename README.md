@@ -6,6 +6,16 @@ Ligue o PC e escolha o próximo sistema por voz com Sinric Pro: um Switch aciona
 
 Fluxo principal: Sinric Pro → ESP32 → WoL → iPXE local → `/boot.ipxe` → `RemoteBoot.efi` embutido → loader EFI local. A UKI é opcional. O PC precisa de Ethernet com WoL; a ESP32 usa Wi-Fi na mesma rede/broadcast. Dashboard e agents ampliam o controle, mas não substituem o fluxo Sinric.
 
+## Downloads por versão
+
+Baixe os agents em [Releases](https://github.com/caduHD4/esp32-remote-boot/releases), na seção **Assets** da versão desejada:
+
+- **Windows x64:** `remote-boot-agent-win-x64.exe`.
+- **Linux x64:** `remote-boot-agent-linux-x64`.
+- **Verificação:** `SHA256SUMS`.
+
+Baixe também **Source code (zip)** da mesma versão para obter os installers. A versão inicial é uma **pré-release experimental**. Como o repositório é privado, é necessário entrar no GitHub com uma conta que tenha acesso.
+
 ## Primeiro uso
 
 1. Instale Python 3 e PlatformIO Core 6.1.18: `python -m pip install platformio==6.1.18`.
@@ -40,7 +50,7 @@ Não use `default` durante a validação inicial. Se um Switch iniciar o sistema
 
 O cliente principal usa **C# NativeAOT + WebSocket persistente**. Recebe comandos por evento, sem polling HTTP de 12 s. Não exige .NET instalado; há executáveis separados para Windows x64 e Linux x64. Keepalive de 60 s e reconexão continuam necessários.
 
-Antes de instalar o agent, baixe os artifacts **agent-win-x64** / **agent-linux-x64** em **Actions → Native agent**, de uma execução bem-sucedida, ou compile o código. Atualize a ESP32 para firmware 2.1. O [guia do agent nativo](docs/native-agent.md) mostra build, download, instalação e migração completos.
+Antes de instalar o agent, baixe o executável Windows/Linux em [Releases](https://github.com/caduHD4/esp32-remote-boot/releases), ou compile o código. Os artifacts de Actions continuam disponíveis para builds de desenvolvimento. Atualize a ESP32 para firmware 2.1. O [guia do agent nativo](docs/native-agent.md) mostra build, download, instalação e migração completos.
 
 ```bash
 # Linux: marque o binário baixado como executável e instale

@@ -1,0 +1,86 @@
+name: Publish release
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths: ['.github/workflows/publish-release.yml']
+permissions:
+  contents: read
+concurrency:
+  group: publish-native-release
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    uses: ./.github/workflows/native-agent.yml
+    permissions:
+      contents: read
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_COMMIT }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-*
+          path: release-input
+      - name: Prepare versioned release assets
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, os, pathlib, re, shutil
+          source = pathlib.Path('firmware/src/main.cpp').read_text()
+          match = re.search(r'constexpr char Version\[\]="([0-9]+\.[0-9]+\.[0-9]+-experimental)";', source)
+          if not match:
+              raise SystemExit('This workflow publishes experimental versions only; update Version in the firmware first.')
+          tag = 'v' + match[1]
+          assets = pathlib.Path('release-assets')
+          assets.mkdir()
+          files = {
+              'agent-win-x64/remote-boot-agent.exe': 'remote-boot-agent-win-x64.exe',
+              'agent-linux-x64/remote-boot-agent': 'remote-boot-agent-linux-x64',
+          }
+          checksums = []
+          for source_name, name in files.items():
+              src = pathlib.Path('release-input') / source_name
+              if not src.is_file() or src.stat().st_size == 0:
+                  raise SystemExit('Missing native executable: ' + source_name)
+              dst = assets / name
+              shutil.copyfile(src, dst)
+              checksums.append(hashlib.sha256(dst.read_bytes()).hexdigest() + '  ' + name)
+          (assets / 'SHA256SUMS').write_text('\n'.join(checksums) + '\n')
+          pathlib.Path('release-notes.md').write_text(
+              '# Agents C# NativeAOT para Windows e Linux\n\n'
+              '- Windows x64: baixe `remote-boot-agent-win-x64.exe`.\n'
+              '- Linux x64: baixe `remote-boot-agent-linux-x64` e aplique `chmod +x` ao arquivo.\n'
+              '- Confira os hashes em `SHA256SUMS`. Não é necessário instalar .NET.\n\n'
+              'Baixe também **Source code (zip)** desta versão para obter os installers e a documentação. '
+              'Passe o caminho do executável baixado ao installer; exemplos no [guia de instalação]('
+              'https://github.com/' + os.environ['GH_REPO'] + '/blob/' + tag + '/docs/native-agent.md).\n\n'
+              '**Atualize a ESP32 para o firmware 2.1 ou posterior compatível antes de migrar os agents.** '
+              'Esta release contém os agents; compile/instale o firmware conforme o README.\n\n'
+              'WebSocket persistente, keepalive de 60 s, reconexão e reboot/shutdown com ACK e sessão. '
+              'Os dois executáveis foram compilados e passaram no self-test, com comandos de energia simulados. '
+              'Shutdown físico, cloud Sinric e consumo de CPU/RAM ainda exigem validação em hardware.\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('RELEASE_TAG=' + tag + '\n')
+          PY
+      - name: Publish prerelease without overwriting existing versions
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists. Existing versions are not overwritten."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" release-assets/* --target "$RELEASE_COMMIT" --title "Remote Boot $RELEASE_TAG" --draft --prerelease --notes-file release-notes.md
+          gh release edit "$RELEASE_TAG" --draft=false
+          gh release view "$RELEASE_TAG" --json url,tagName,isDraft,isPrerelease,assets
