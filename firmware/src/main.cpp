@@ -11,6 +11,7 @@
 #include "boot_state.hpp"
 #include "power_command.hpp"
 #include "config_policy.hpp"
+#include "local_wifi.h"
 #include "web_asset.h"
 
 constexpr char Version[]="2.1.0-experimental";
@@ -143,6 +144,11 @@ void setupAP() {
     WiFi.softAP(name.c_str(),setupKey.c_str()); dns.start(53,"*",WiFi.softAPIP());
     Serial.println("Setup AP: "+name); Serial.println("Setup Wi-Fi password / first-run token: "+setupKey);
     logEvent("SETUP_AP_STARTED");
+}
+bool connectWiFi(const char* ssid,const char* password) {
+    WiFi.begin(ssid,password);
+    uint32_t start=millis(); while(WiFi.status()!=WL_CONNECTED&&millis()-start<20000) delay(50);
+    return WiFi.status()==WL_CONNECTED;
 }
 void routes() {
     const char* headers[]={"Authorization"}; server.collectHeaders(headers,1);
@@ -334,8 +340,14 @@ void setup() {
     WiFi.persistent(false); WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setAutoReconnect(true);
     if(stored.length()&&!locked) {
         if(!config["dhcp"].as<bool>()) { IPAddress ip,mask,gateway,resolver; ip.fromString(config["ip"].as<const char*>()); mask.fromString(config["subnet"].as<const char*>()); gateway.fromString(config["gateway"].as<const char*>()); resolver.fromString(config["dns"].as<const char*>()); WiFi.config(ip,gateway,mask,resolver); }
-        WiFi.begin(config["ssid"].as<const char*>(),config["wifi_password"]|"");
-        uint32_t start=millis(); while(WiFi.status()!=WL_CONNECTED&&millis()-start<20000) delay(50);
+        connectWiFi(config["ssid"].as<const char*>(),config["wifi_password"]|"");
+    } else if(strlen(REMOTE_BOOT_LOCAL_WIFI_SSID)) {
+        setupMode=true; setupKey=randomToken();
+        if(connectWiFi(REMOTE_BOOT_LOCAL_WIFI_SSID,REMOTE_BOOT_LOCAL_WIFI_PASSWORD)) {
+            Serial.println("Local Wi-Fi connected: "+WiFi.localIP().toString());
+            Serial.println("Setup dashboard token: "+setupKey);
+            logEvent("LOCAL_WIFI_CONNECTED");
+        } else Serial.println("Local Wi-Fi connection failed; starting recovery AP.");
     }
     if(WiFi.status()!=WL_CONNECTED) setupAP();
     routes(); startAgentSocket(); startSinric(); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");

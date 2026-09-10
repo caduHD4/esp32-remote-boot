@@ -9,4 +9,5 @@ g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined "$root/tests/t
 bash "$root/tests/test_shutdown.sh"
 bash "$root/tests/test_discovery.sh"
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "$root/agent" "$root/installer" "$root/ipxe" "$root/scripts" "$root/tests" -name '*.sh' -print0)
+python3 "$root/tests/test_embed_local_wifi.py"
 python3 "$root/scripts/scan_secrets.py"

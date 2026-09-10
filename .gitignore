@@ -11,6 +11,7 @@ __pycache__/
 *.log
 agent.json
 config.local.*
+firmware/include/local_wifi.generated.h
 .env*
 firmware/include/web_asset.h
 
