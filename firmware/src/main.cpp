@@ -11,12 +11,15 @@
 #include "boot_state.hpp"
 #include "power_command.hpp"
 #include "config_policy.hpp"
+#include "setup_ap.hpp"
 #include "web_asset.h"
 
 constexpr char Version[]="2.1.0-experimental";
 WebServer server(80); DNSServer dns; WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
 bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
+bool setupApReady=false,setupDnsReady=false,servicesStarted=false;
+uint32_t setupDiagnosticsAt=0;
 String setupKey,osName,hostName,logs[32],agentSession;
 rb::PowerCommand powerCommand;
 uint32_t logIndex=0,restartAt=0,lastWol=0,wolAt=0,wifiLostAt=0;
@@ -137,12 +140,91 @@ void wolTick() {
     else logEvent("WOL_FAILED");
     --wolRemaining; lastWol=millis(); wolSent=true; wolAt=millis()+config["wol_interval_ms"].as<uint32_t>();
 }
+void printWifiDiagnostics() {
+    const wifi_mode_t mode=WiFi.getMode();
+    const char* modeName=mode==WIFI_AP?"AP":mode==WIFI_STA?"STA":mode==WIFI_AP_STA?"AP_STA":"OFF";
+    Serial.printf("WiFi mode: %s (%d)\n",modeName,static_cast<int>(mode));
+    Serial.printf("STA status: %d\n",static_cast<int>(WiFi.status()));
+    if(mode==WIFI_AP || mode==WIFI_AP_STA) {
+        Serial.println("AP SSID: "+WiFi.softAPSSID());
+        Serial.println("AP IP: "+WiFi.softAPIP().toString());
+        Serial.println("AP MAC: "+WiFi.softAPmacAddress());
+        Serial.printf("Channel: %ld\n",static_cast<long>(WiFi.channel()));
+        Serial.printf("Connected stations: %u\n",static_cast<unsigned>(WiFi.softAPgetStationNum()));
+    }
+    if((mode==WIFI_STA || mode==WIFI_AP_STA) && WiFi.status()==WL_CONNECTED)
+        Serial.printf("STA RSSI: %ld dBm\n",static_cast<long>(WiFi.RSSI()));
+}
+
+struct SetupApAdapter {
+    const String& name;
+    IPAddress ip;
+
+    void event(const char* value) {
+        logEvent(value);
+        if(strcmp(value,"SETUP_AP_FAILED")==0 || strcmp(value,"SETUP_AP_INVALID_IP")==0 ||
+           strcmp(value,"SETUP_DNS_FAILED")==0) Serial.print("ERROR: ");
+        Serial.println(value);
+    }
+    bool startAp(uint8_t attempt) {
+        Serial.printf("SoftAP attempt %u/%u\n",static_cast<unsigned>(attempt),
+                      static_cast<unsigned>(rb::SetupApMaxAttempts));
+        const bool modeSet=WiFi.mode(WIFI_AP);
+        Serial.printf("Set WiFi mode AP: %s\n",modeSet?"OK":"FAILED");
+        delay(100);
+        const bool started=modeSet && WiFi.softAP(name.c_str(),setupKey.c_str(),
+                                                 rb::SetupApChannel,false,rb::SetupApMaxClients);
+        Serial.printf("SoftAP start: %s\n",started?"OK":"FAILED");
+        printWifiDiagnostics();
+        return started;
+    }
+    bool hasValidIp() {
+        ip=WiFi.softAPIP();
+        return ip!=IPAddress(0,0,0,0);
+    }
+    void stopAp() {
+        const bool stopped=WiFi.mode(WIFI_OFF);
+        Serial.printf("WiFi radio reset: %s\n",stopped?"OK":"FAILED");
+        delay(300);
+    }
+    bool startDns() {
+        // Arduino-ESP32 2.0.17 DNSServer::start returns bool.
+        const bool started=dns.start(53,"*",ip);
+        Serial.printf("DNS captive portal: %s\n",started?"OK":"FAILED");
+        if(!started) dns.stop();
+        return started;
+    }
+};
+
 void setupAP() {
-    setupMode=true; WiFi.mode(WIFI_AP_STA); setupKey=randomToken();
+    setupMode=true; setupApReady=false; setupDnsReady=false;
+    dns.stop();
+    setupKey=randomToken();
     String name="RemoteBoot-"+String(static_cast<uint32_t>(ESP.getEfuseMac())&0xffff,HEX);
-    WiFi.softAP(name.c_str(),setupKey.c_str()); dns.start(53,"*",WiFi.softAPIP());
-    Serial.println("Setup AP: "+name); Serial.println("Setup Wi-Fi password / first-run token: "+setupKey);
-    logEvent("SETUP_AP_STARTED");
+    Serial.println("\n=== RemoteBoot Setup AP ===");
+    Serial.println("SSID: "+name);
+    Serial.println("Password: "+setupKey);
+    Serial.printf("Chip model: %s\n",ESP.getChipModel());
+    Serial.printf("Chip revision: %u\n",static_cast<unsigned>(ESP.getChipRevision()));
+    Serial.printf("Flash size: %lu bytes\n",static_cast<unsigned long>(ESP.getFlashChipSize()));
+    Serial.printf("Requested channel: %u; hidden: false; max clients: %u\n",
+                  static_cast<unsigned>(rb::SetupApChannel),static_cast<unsigned>(rb::SetupApMaxClients));
+    WiFi.setAutoReconnect(false);
+    // Do not erase saved credentials: recovery setup also uses this path.
+    const bool disconnected=WiFi.disconnect(true,false);
+    Serial.printf("STA disconnect: %s\n",disconnected?"OK":"FAILED (or STA inactive)");
+    delay(200);
+    SetupApAdapter adapter{name,IPAddress()};
+    const auto result=rb::startSetupAp(adapter);
+    setupApReady=result.apReady; setupDnsReady=result.dnsReady;
+    setupDiagnosticsAt=millis();
+    if(!setupApReady) {
+        if(servicesStarted) server.stop();
+        Serial.println("Fallback setup failed; reset the board to retry.");
+        printWifiDiagnostics();
+    } else if(servicesStarted) {
+        Serial.println(setupDnsReady?"Setup ready":"Setup ready (DNS unavailable; open AP IP directly)");
+    }
 }
 void routes() {
     const char* headers[]={"Authorization"}; server.collectHeaders(headers,1);
@@ -338,10 +420,17 @@ void setup() {
         uint32_t start=millis(); while(WiFi.status()!=WL_CONNECTED&&millis()-start<20000) delay(50);
     }
     if(WiFi.status()!=WL_CONNECTED) setupAP();
-    routes(); startAgentSocket(); startSinric(); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
+    if(setupMode && !setupApReady) return;
+    routes(); startAgentSocket(); servicesStarted=true; startSinric();
+    if(setupMode) Serial.println(setupDnsReady?"Setup ready":"Setup ready (DNS unavailable; open AP IP directly)");
+    logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
 }
 void loop() {
-    server.handleClient(); agentSocketTick(); if(setupMode) dns.processNextRequest(); wolTick();
+    if(setupMode && uint32_t(millis()-setupDiagnosticsAt)>=10000) {
+        setupDiagnosticsAt=millis(); printWifiDiagnostics();
+    }
+    if(setupMode && !setupApReady) { delay(1); return; }
+    server.handleClient(); agentSocketTick(); if(setupDnsReady) dns.processNextRequest(); wolTick();
     if(sinricStarted) { SinricPro.handle(); for(int i=0;i<8;++i) if(slotReset[i]&&static_cast<int32_t>(millis()-slotReset[i])>=0) { SinricProSwitch& d=SinricPro[slotIds[i]]; d.sendPowerStateEvent(false); slotReset[i]=0; } }
     if(!setupMode) { if(WiFi.status()!=WL_CONNECTED) { if(!wifiLostAt) wifiLostAt=millis(); if(uint32_t(millis()-wifiLostAt)>60000) setupAP(); } else wifiLostAt=0; }
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);

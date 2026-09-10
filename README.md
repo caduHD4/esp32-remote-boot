@@ -27,7 +27,7 @@ Baixe também **Source code (zip)** da mesma versão para obter os installers. A
    pio device monitor -b 115200
    ```
 
-3. Conecte ao AP `RemoteBoot-XXXX`. A senha aleatória aparece no monitor serial; ela também é o token do primeiro acesso.
+3. Após o upload, abra o Serial Monitor em **115200** (`pio device monitor`). Confirme `SoftAP start: OK`, `SETUP_AP_STARTED`, `SSID: RemoteBoot-XXXX` e `AP IP: 192.168.4.1` (ou outro IP válido). Se aparecer `SoftAP start: FAILED`, `SETUP_AP_INVALID_IP` ou a rede não aparecer, consulte [diagnóstico do AP](docs/troubleshooting.md#remoteboot-xxxx-não-aparece). Conecte ao AP `RemoteBoot-XXXX`. A senha aleatória aparece no monitor serial; ela também é o token do primeiro acesso.
 4. Abra `http://192.168.4.1`, conecte usando esse token e configure SSID, senha Wi-Fi, MAC Ethernet e dois tokens **diferentes**, com 24–128 caracteres ASCII de `A–Z`, `a–z`, `0–9`, `_`, `-`. Gere-os com `python -c "import secrets; print(secrets.token_hex(24))"`. Guarde-os.
 5. Salve, reconecte à LAN e abra o IP da ESP32 com o token administrativo. Reserve o IP no DHCP. O endereço é embutido no build iPXE e não deve mudar.
 6. Configure UEFI/WoL seguindo `docs/bios.md`, `docs/linux-wol.md` e `docs/windows-wol.md`.
