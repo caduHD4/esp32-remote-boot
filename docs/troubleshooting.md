@@ -25,3 +25,33 @@
 | Build precisa de internet | Instale dependências PlatformIO/Git previamente para modo offline; o ZIP não inclui toolchains completos. |
 
 Para diagnóstico, salve logs sem tokens. `tests/api_smoke.py` realiza apenas leituras quando executado com RB_URL/RB_ADMIN_TOKEN. Não publique backups pessoais de firmware.
+
+
+### RemoteBoot-XXXX não aparece
+
+Abra `pio device monitor` em 115200 e pressione RESET para capturar o boot completo.
+O setup usa **WIFI_AP**, canal **1**, SSID visível e até **4 clientes**.
+Não precisa de STA: Wi-Fi salvo é aplicado em modo STA no próximo boot.
+O mesmo modo AP é usado na recuperação após perda prolongada da LAN; as configurações salvas não são apagadas.
+
+Confira `SoftAP start`, `AP IP`, `AP MAC`, `WiFi mode`, `Channel` e `Connected stations`.
+O log também informa chip, revision e tamanho da flash. Diagnósticos sem senha se repetem a cada 10 s durante setup.
+
+| Resultado | Interpretação / ação |
+| --- | --- |
+| `SoftAP start: FAILED` | A chamada falhou, ou não foi possível selecionar modo AP. São no máximo 3 tentativas totais, com rádio desligado entre falhas. |
+| `ERROR: SETUP_AP_INVALID_IP` | O AP retornou sucesso, mas IP é `0.0.0.0`; essa tentativa é descartada e não inicia DNS. |
+| `ERROR: SETUP_AP_FAILED` | Todas as tentativas falharam; sem `SETUP_AP_STARTED`, servidor de setup ou `READY`. O loop permanece responsivo; pressione RESET para tentar novamente. |
+| `SETUP_AP_STARTED`, IP válido, rede ausente | A API confirmou AP/IP, mas isso não comprova transmissão de beacons. Faça scan em outro dispositivo com Wi-Fi 2,4 GHz e colete os dois resultados. |
+| `ERROR: SETUP_DNS_FAILED` | AP válido, DNS indisponível; conecte e abra diretamente `http://192.168.4.1` (ou o IP exibido). |
+| Clientes = 0 | Nenhum cliente associado no instante da leitura; não comprova defeito de rádio. |
+
+Se falhar: reinicie a placa; verifique alimentação; teste outra porta/cabo USB;
+confirme a placa física e o ambiente `esp32c3_4mb` antes de alterar qualquer parâmetro.
+Registre o log completo, modelo real da placa, fonte/cabo e resultado do scan.
+Remova **Password/token** do log antes de compartilhar. Não publique credenciais.
+Não conclua que o rádio está defeituoso somente pelo retorno da API.
+
+Depois de um reset o token aleatório muda; use a senha do boot atual.
+Não altere board, framework, versões ou parâmetros ao acaso antes de coletar o log.
+Siga também [os testes de hardware](hardware-test.md).
