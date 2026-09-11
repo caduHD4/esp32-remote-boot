@@ -22,7 +22,7 @@ JSON; header `Authorization: Bearer TOKEN`. Corpo máximo aceito pelo handler: 1
 
 Pending TTL: 30–3.600 s, padrão 180. Agent nativo: WebSocket/keepalive 60 s, expiração de presença 90 s; HTTP legado: heartbeat 12 s, offline 45 s. WoL: porta 1–65535, 1–10 repetições, intervalo 20–1000 ms e cooldown 3 s. Offline significa ausência de heartbeat, não confirmação elétrica de desligamento.
 
-Schema/config: veja `config.example.json` para patch sanitizado; ele não contém credenciais utilizáveis. `default_target`, `fallback_boot_id` aceitam string vazia para nenhum. `physical_boot_behavior`: `default_target`, `last_selected`, `exit_to_firmware`. Sinric slots: `[{device_id:"ID_REAL",boot_id:"0001"}]` ou `boot_id:"default"`.
+Schema/config: veja `config.example.json` para patch sanitizado; ele não contém credenciais utilizáveis. `default_target`, `fallback_boot_id` aceitam string vazia para nenhum. `physical_boot_behavior`: `default_target`, `last_selected`, `exit_to_firmware`. Sinric slots: `[{device_id:"ID_REAL",boot_id:"0001"}]` ou `boot_id:"default"`. Ativar Sinric sem App Key/App Secret válidos retorna `SINRIC_CREDENTIALS_REQUIRED`.
 
 Erros são `{error:"CODIGO"}`. 400 entrada inválida, 401/403 autenticação, 409 conflito, 413 corpo grande, 429 cooldown, 500 NVS, 503 indisponível. A API não garante que WoL acordou a máquina: 202 confirma apenas fila aceita.
 

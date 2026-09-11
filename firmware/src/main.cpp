@@ -12,10 +12,11 @@
 #include "power_command.hpp"
 #include "config_policy.hpp"
 #include "setup_network_policy.hpp"
+#include "sinric_policy.hpp"
 #include "local_wifi.h"
 #include "web_asset.h"
 
-constexpr char Version[]="2.1.2-experimental";
+constexpr char Version[]="2.1.3-experimental";
 WebServer server(80); DNSServer dns; WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
 bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
@@ -99,7 +100,7 @@ bool validate(JsonDocument& d) {
         String target=slots[i]["boot_id"]|"";
         if(target!="default"&&target!="shutdown"&&!exists(idValue(slots[i]["boot_id"]))) return false;
     }
-    if(d["sinric_enabled"].as<bool>() && (strlen(d["sinric_app_key"]|"")<10 || strlen(d["sinric_app_secret"]|"")<10)) return false;
+    if(rb::sinricReadiness(d["sinric_enabled"].as<bool>(),d["sinric_app_key"]|"",d["sinric_app_secret"]|"")==rb::SinricReadiness::MissingCredentials) return false;
     return true;
 }
 void reloadState() {
@@ -179,6 +180,7 @@ void routes() {
         JsonDocument patch,next; if(!body(patch)) return; next.set(config);
         const char* allowed="|ssid|wifi_password|admin_token|agent_token|pc_name|mac|dhcp|ip|subnet|gateway|dns|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|sinric_enabled|sinric_app_key|sinric_app_secret|sinric_slots|systems|";
         for(JsonPair p:patch.as<JsonObject>()) { if(!strstr(allowed,(String("|")+p.key().c_str()+"|").c_str())) { errorReply(400,"UNKNOWN_FIELD"); return; } next[p.key()]=p.value(); }
+        if(rb::sinricReadiness(next["sinric_enabled"].as<bool>(),next["sinric_app_key"]|"",next["sinric_app_secret"]|"")==rb::SinricReadiness::MissingCredentials) { errorReply(400,"SINRIC_CREDENTIALS_REQUIRED"); return; }
         if(!validate(next)) { errorReply(400,"INVALID_CONFIG"); return; }
         if(!persist(next)) { errorReply(500,"NVS_WRITE_FAILED"); return; }
         config.set(next); reloadState(); JsonDocument d; d["saved"]=true; d["restarting"]=true; jsonReply(200,d); restartAt=millis()+1500;
@@ -308,7 +310,10 @@ void agentSocketTick() {
     }
 }
 void startSinric() {
-    if(!config["sinric_enabled"].as<bool>()||setupMode||locked) return;
+    if(setupMode||locked) return;
+    rb::SinricReadiness readiness=rb::sinricReadiness(config["sinric_enabled"].as<bool>(),config["sinric_app_key"]|"",config["sinric_app_secret"]|"");
+    if(readiness==rb::SinricReadiness::Disabled) return;
+    if(readiness==rb::SinricReadiness::MissingCredentials) { logEvent("SINRIC_CONFIG_INCOMPLETE"); return; }
     size_t i=0;
     for(JsonObject slot:config["sinric_slots"].as<JsonArray>()) {
         slotIds[i]=slot["device_id"].as<String>(); size_t index=i++;
@@ -362,4 +367,3 @@ void loop() {
     if(setupNetwork.shouldStartRecoveryAp(WiFi.status()==WL_CONNECTED,millis())) setupAP();
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);
 }
-
