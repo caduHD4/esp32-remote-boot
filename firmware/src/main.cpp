@@ -15,7 +15,7 @@
 #include "local_wifi.h"
 #include "web_asset.h"
 
-constexpr char Version[]="2.1.1-experimental";
+constexpr char Version[]="2.1.2-experimental";
 WebServer server(80); DNSServer dns; WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
 bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
@@ -156,7 +156,7 @@ void routes() {
     const char* headers[]={"Authorization"}; server.collectHeaders(headers,1);
     server.on("/",HTTP_GET,[]{ server.sendHeader("Content-Encoding","gzip"); server.send_P(200,"text/html",reinterpret_cast<const char*>(webAsset),sizeof webAsset); });
     server.on("/boot.ipxe",HTTP_GET,[]{
-        int target=locked?-1:state.selected(millis()); String script="#!ipxe\n";
+        int target=locked?-1:state.dispatch(millis()); String script="#!ipxe\n";
         if(target>=0) { script+="imgexec RemoteBoot.efi boot="+idText(target); if(state.valid(state.fallback)&&state.fallback!=target) script+=" fallback="+idText(state.fallback); script+=" || goto failed\nexit\n:failed\necho RemoteBoot failed\nexit 1\n"; }
         else script+="exit\n";
         server.sendHeader("Cache-Control","no-store"); server.send(200,"text/plain",script);
@@ -362,3 +362,4 @@ void loop() {
     if(setupNetwork.shouldStartRecoveryAp(WiFi.status()==WL_CONNECTED,millis())) setupAP();
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);
 }
+

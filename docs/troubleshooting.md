@@ -18,6 +18,8 @@
 | `Cannot identify created entry` | Atualize o repositório. Builds anteriores não reconheciam saídas de `efibootmgr` que exibiam `HD(...)` após o rótulo. Antes de repetir, remova somente a entrada duplicada após comparar seu caminho com `efibootmgr -v`. |
 | EFI NOT_FOUND | Entry/ESP/assinatura/path válidos? Short forms fora de HD() não têm expansão integral. Escolha entry completa/compatível. |
 | EFI ACCESS_DENIED | Entrada inativa, bloqueada, path inválido ou Secure Boot. Não desative bloqueios de recursão para contornar. |
+| Após selecionar, ocorre um segundo POST/reset | É esperado: o primeiro boot executa o iPXE; `RemoteBoot.efi` grava `BootNext` e reinicia; o firmware então inicia o alvo. |
+| Após `BootNext`, volta ao Windows | Confirme o alvo com `efibootmgr -v` e teste `efibootmgr --bootnext ID`. A proteção de 60 segundos impede repetição imediata do mesmo alvo e permite que a UEFI continue o `BootOrder`. |
 | Seleção GRUB mostra menu | Boot#### seleciona o loader, não item interno. Configure o loader ou use UKI opcional. |
 | Kernel travou após iniciar | Fallback do EFI só cobre retorno de erro de LoadImage/StartImage, não falha tardia do OS. |
 | Firmware volta ao menu/shell | Continuação após exit depende da UEFI. Teste BootNext e ordem original; não promova até validar. |

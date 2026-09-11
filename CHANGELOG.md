@@ -18,3 +18,9 @@
 - Build ESP32-C3 4 MB sem OTA, testes nativos e workflows CI/release.
 
 Validação de software não substitui os testes em hardware descritos no relatório.
+# 2.1.2-experimental
+
+- Substitui o encadeamento direto de entradas `Boot####` por `BootNext` seguido de reset UEFI, delegando ao firmware o mesmo fluxo validado por `efibootmgr --bootnext`.
+- Impede o ESP32 de entregar o mesmo alvo novamente durante 60 segundos, evitando ciclo rápido caso o firmware retorne ao iPXE.
+- Mantém a validação de entradas inativas, inválidas e recursivas antes de gravar `BootNext`.
+

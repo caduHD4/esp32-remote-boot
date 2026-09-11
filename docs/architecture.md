@@ -17,3 +17,9 @@ Timeout de DHCP e progresso HTTP usa 10 s no script inicial (builder aceita 1–
 Somente `net0` é selecionada no profile inicial, para evitar multiplicar timeouts; múltiplas NICs exigem ajuste do template e teste. `exit` retorna ao chamador/firmware; a continuação exata do BootOrder depende da implementação UEFI.
 
 Fontes primárias: [UEFI Boot Manager](https://uefi.org/specs/UEFI/2.10/03_Boot_Manager.html), [Loaded Image](https://uefi.org/specs/UEFI/2.10/09_Protocols_EFI_Loaded_Image.html), [iPXE ifconf](https://ipxe.org/cmd/ifconf), [iPXE imgfetch](https://ipxe.org/cmd/imgfetch), [iPXE embed](https://ipxe.org/embed).
+# Despacho UEFI
+
+O `RemoteBoot.efi` valida a entrada solicitada, grava seu ID de 16 bits em `BootNext` e chama `ResetSystem(EfiResetCold)`. No boot seguinte, o firmware consome `BootNext` e executa a entrada usando sua política nativa. Isso evita tentar reproduzir parcialmente o Boot Manager dentro do iPXE.
+
+O endpoint `/boot.ipxe` aplica uma janela de 60 segundos antes de entregar novamente o mesmo alvo. Uma nova solicitação aceita pela API rearma o despacho imediatamente. Se a entrada indicada não iniciar e o firmware voltar ao iPXE durante a janela, o script sai e a UEFI continua a ordem normal.
+
