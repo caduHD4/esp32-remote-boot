@@ -6,6 +6,8 @@ g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-fram
 "$temp/test_core"
 g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined "$root/tests/test_power.cpp" -o "$temp/test_power"
 "$temp/test_power"
+g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_setup_network.cpp" -o "$temp/test_setup_network"
+"$temp/test_setup_network"
 bash "$root/tests/test_shutdown.sh"
 bash "$root/tests/test_discovery.sh"
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "$root/agent" "$root/installer" "$root/ipxe" "$root/scripts" "$root/tests" -name '*.sh' -print0)

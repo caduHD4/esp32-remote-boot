@@ -8,6 +8,8 @@ from pathlib import Path
 def credential(value, field):
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{field} must not contain control characters")
     return value
 
 
@@ -24,10 +26,10 @@ def generate(source, output):
             config = json.loads(source.read_text(encoding="utf-8"))
             ssid = credential(config.get("ssid"), "ssid")
             password = credential(config.get("wifi_password", ""), "wifi_password")
-            if not 1 <= len(ssid) <= 32:
-                raise ValueError("ssid must contain 1 to 32 characters")
-            if len(password) > 63:
-                raise ValueError("wifi_password must contain at most 63 characters")
+            if not 1 <= len(ssid.encode("utf-8")) <= 32:
+                raise ValueError("ssid must contain 1 to 32 bytes in UTF-8")
+            if len(password.encode("utf-8")) > 63:
+                raise ValueError("wifi_password must contain at most 63 bytes in UTF-8")
     except (OSError, json.JSONDecodeError, ValueError) as error:
         print(f"config.local.json: {error}", file=sys.stderr)
         raise ValueError from error

@@ -5,6 +5,7 @@
 | ESP32 sem aparecer no USB | Cabo de dados, porta, driver USB e modo de download da placa; o profile usa USB CDC C3. Não aguarda serial conectado para operar. |
 | Setup não abre | Veja senha do AP no monitor serial; acesse diretamente 192.168.4.1. Não depende do popup de captive portal. |
 | Wi-Fi não conecta | SSID 2,4 GHz/credenciais, sinal e DHCP. Após timeout aparece AP recuperável; configuração antiga exige token existente. |
+| `WiFiUdp parsePacket(): could not receive data: 9` contínuo | Atualize para 2.1.1 ou superior. Builds 2.1.0 processavam o DNS mesmo no setup direto pela LAN. |
 | SCHEMA_LOCKED | Flash preservada; volte para versão compatível ou restaure explicitamente. Não há apagamento automático. |
 | 401/403 | Token admin/agent correto, 24–128 caracteres permitidos; confira qual permissão a rota aceita. |
 | INVALID_CONFIG | Confira MAC unicast, limites WoL/TTL, IDs existentes e tokens diferentes. Nomes até 63 bytes UTF-8. |

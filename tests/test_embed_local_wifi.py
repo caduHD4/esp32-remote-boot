@@ -47,6 +47,16 @@ class EmbedLocalWifiTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('#define REMOTE_BOOT_LOCAL_WIFI_SSID ""', output.read_text(encoding="utf-8"))
 
+    def test_rejects_ssid_longer_than_32_utf8_bytes(self):
+        result, _ = self.run_generator({"ssid": "é" * 17, "wifi_password": "password"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("32 bytes", result.stderr)
+
+    def test_rejects_control_characters_that_break_generated_header(self):
+        result, _ = self.run_generator({"ssid": "Casa\nInvalida", "wifi_password": "password"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("control characters", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

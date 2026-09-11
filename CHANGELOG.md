@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.1-experimental
+
+- Corrige spam `WiFiUdp parsePacket(): could not receive data: 9` no setup direto pela LAN.
+- Mantém o AP de recuperação após perda do Wi-Fi durante o primeiro acesso.
+- Preserva SSID/senha de `config.local.json` ao salvar a configuração pela dashboard.
+- Valida limites em bytes UTF-8 e rejeita caracteres de controle nas credenciais compiladas.
+
+
 ## 2.0.0-experimental
 
 - Catálogo de 24 entradas Boot####; seleção com TTL, fallback e heartbeat.

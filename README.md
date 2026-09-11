@@ -29,7 +29,7 @@ Baixe também **Source code (zip)** da mesma versão para obter os installers. A
    ```
 
 4. Com `config.local.json`, a ESP32 conecta diretamente à LAN e o monitor serial mostra `Local Wi-Fi connected: IP` e o token temporário da dashboard. Abra `http://IP`. Sem esse arquivo — ou se a conexão falhar — conecte ao AP `RemoteBoot-XXXX` e abra `http://192.168.4.1`; a senha/token temporário aparece no serial.
-5. Na dashboard, configure MAC Ethernet e dois tokens **diferentes**, com 24–128 caracteres ASCII de `A–Z`, `a–z`, `0–9`, `_`, `-`. Gere-os com `python -c "import secrets; print(secrets.token_hex(24))"`. Guarde-os.
+5. Na dashboard, SSID e senha já estarão preservados pela configuração local. Configure MAC Ethernet e dois tokens **diferentes**, com 24–128 caracteres ASCII de `A–Z`, `a–z`, `0–9`, `_`, `-`. Gere-os com `python -c "import secrets; print(secrets.token_hex(24))"`. Guarde-os.
 6. Salve e abra o IP da ESP32 com o token administrativo. Reserve o IP no DHCP. O endereço é embutido no build iPXE e não deve mudar.
 6. Configure UEFI/WoL seguindo `docs/bios.md`, `docs/linux-wol.md` e `docs/windows-wol.md`.
 7. Execute o installer do host e sincronize as entradas UEFI na dashboard. Mapeie dois Switches Sinric Pro: um para cada entrada. O fluxo guiado está em `docs/sinric.md`.
