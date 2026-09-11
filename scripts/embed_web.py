@@ -15,10 +15,10 @@ def write_web_asset(root: Path) -> None:
     data = gzip.compress(build_web_document(root), mtime=0)
     target = root / "firmware/include/web_asset.h"
     target.write_text(
-        "#pragma once\\n#include <pgmspace.h>\\n"
+        "#pragma once\n#include <pgmspace.h>\n"
         "const unsigned char webAsset[] PROGMEM = {"
         + ",".join(map(str, data))
-        + "};\\n"
+        + "};\n"
     )
 
 
@@ -29,4 +29,3 @@ except NameError:
 
 if env is not None:
     write_web_asset(Path(env["PROJECT_DIR"]))
-

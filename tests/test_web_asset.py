@@ -24,4 +24,10 @@ second = gzip.compress(MODULE.build_web_document(ROOT), mtime=0)
 assert first == second
 assert gzip.decompress(first) == document
 
+MODULE.write_web_asset(ROOT)
+header = (ROOT / "firmware/include/web_asset.h").read_text()
+assert header.startswith("#pragma once\n#include <pgmspace.h>\n")
+assert "\\n" not in header[:80]
+assert "const unsigned char webAsset[] PROGMEM" in header
+
 print("PASS: deterministic multi-source dashboard asset")
