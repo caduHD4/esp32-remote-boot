@@ -15,6 +15,7 @@
 | 409 PC_ALREADY_ON | Boot normal não reinicia. Use reboot explícito com agent ou force somente para reenviar WoL. |
 | iPXE não obtém rede | Confirme cabo, DHCP, driver iPXE, net0 e VLAN. Builder usa primeira NIC; setups multi-NIC precisam ajuste. |
 | iPXE não encontra ESP32 | IP embutido deve ser o IP reservado correto. Rebuild após mudança. Teste GET /boot.ipxe na LAN. |
+| `Cannot identify created entry` | Atualize o repositório. Builds anteriores não reconheciam saídas de `efibootmgr` que exibiam `HD(...)` após o rótulo. Antes de repetir, remova somente a entrada duplicada após comparar seu caminho com `efibootmgr -v`. |
 | EFI NOT_FOUND | Entry/ESP/assinatura/path válidos? Short forms fora de HD() não têm expansão integral. Escolha entry completa/compatível. |
 | EFI ACCESS_DENIED | Entrada inativa, bloqueada, path inválido ou Secure Boot. Não desative bloqueios de recursão para contornar. |
 | Seleção GRUB mostra menu | Boot#### seleciona o loader, não item interno. Configure o loader ou use UKI opcional. |

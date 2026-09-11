@@ -4,6 +4,8 @@ umask 077
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=agent/linux/common.sh
 source "$root/agent/linux/common.sh"
+# shellcheck source=installer/linux/efi_helpers.sh
+source "$root/installer/linux/efi_helpers.sh"
 [[ $EUID == 0 && -d /sys/firmware/efi/efivars ]] || { echo 'Run as root on UEFI Linux' >&2; exit 1; }
 rb_require efibootmgr findmnt lsblk jq curl make gcc objcopy git sha256sum
 read -r -p 'ESP32 IPv4 address: ' esp
@@ -42,8 +44,14 @@ if [[ -f $esp_mount/EFI/iPXE/ipxe.efi ]]; then cp "$esp_mount/EFI/iPXE/ipxe.efi"
 printf 'Will install %s/EFI/iPXE/ipxe.efi on %s partition %s. Backup: %s\n' "$esp_mount" "$disk" "$part" "$backup"
 read -r -p 'Type INSTALL to write the EFI file and create/reuse the boot entry: ' answer
 [[ $answer == INSTALL ]] || exit 0
-existing=$(efibootmgr | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\? Remote Boot iPXE$/\1/p')
-if [[ $(wc -w <<< "$existing") -gt 1 ]]; then echo 'Multiple Remote Boot entries; resolve explicitly before rerun' >&2; exit 1; fi
+mapfile -t existing_ids < <(efibootmgr | rb_remote_boot_ids)
+if (( ${#existing_ids[@]} > 1 )); then
+    printf 'Multiple Remote Boot entries:' >&2
+    printf ' Boot%s' "${existing_ids[@]}" >&2
+    printf '; resolve explicitly before rerun\n' >&2
+    exit 1
+fi
+existing=${existing_ids[0]:-}
 if [[ -n $existing ]]; then
     printf 'Existing entry Boot%s:\n' "$existing"
     efibootmgr -v | sed -n "/^Boot$existing/p"
@@ -57,7 +65,14 @@ mv "$esp_mount/EFI/iPXE/ipxe.efi.new" "$esp_mount/EFI/iPXE/ipxe.efi"
 if [[ -z $existing ]]; then
     # --create-only does not append to BootOrder.
     efibootmgr --create-only --disk "$disk" --part "$part" --label 'Remote Boot iPXE' --loader '\EFI\iPXE\ipxe.efi'
-    existing=$(efibootmgr | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\? Remote Boot iPXE$/\1/p')
+    mapfile -t existing_ids < <(efibootmgr | rb_remote_boot_ids)
+    if (( ${#existing_ids[@]} != 1 )); then
+        printf 'Cannot identify one created entry; found:' >&2
+        printf ' Boot%s' "${existing_ids[@]}" >&2
+        printf '\n' >&2
+        exit 1
+    fi
+    existing=${existing_ids[0]}
 fi
 [[ $existing =~ ^[0-9A-Fa-f]{4}$ ]] || { echo 'Cannot identify created entry' >&2; exit 1; }
 new_order=$(efibootmgr | sed -n 's/^BootOrder: //p')

@@ -10,6 +10,7 @@ g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_setup_network.cpp" -o "$t
 "$temp/test_setup_network"
 bash "$root/tests/test_shutdown.sh"
 bash "$root/tests/test_discovery.sh"
+bash "$root/tests/test_efi_helpers.sh"
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "$root/agent" "$root/installer" "$root/ipxe" "$root/scripts" "$root/tests" -name '*.sh' -print0)
 python3 "$root/tests/test_embed_local_wifi.py"
 python3 "$root/scripts/scan_secrets.py"

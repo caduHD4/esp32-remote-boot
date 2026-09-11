@@ -6,6 +6,7 @@
 - Mantém o AP de recuperação após perda do Wi-Fi durante o primeiro acesso.
 - Preserva SSID/senha de `config.local.json` ao salvar a configuração pela dashboard.
 - Valida limites em bytes UTF-8 e rejeita caracteres de controle nas credenciais compiladas.
+- Corrige detecção/reutilização da entrada `Remote Boot iPXE` quando `efibootmgr` exibe o device path.
 
 
 ## 2.0.0-experimental
