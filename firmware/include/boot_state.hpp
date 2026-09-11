@@ -6,6 +6,7 @@
 namespace rb {
 constexpr int None = -1;
 constexpr size_t MaxEntries = 24;
+constexpr uint32_t DispatchGuardMs = 60000;
 struct Entry { uint16_t id; char name[64]; bool hidden; bool blocked; };
 inline bool parseId(const char* s, int& id) {
     if (!s || strlen(s) != 4) return false;
@@ -25,9 +26,9 @@ inline bool tokenEqual(const char* a,const char* b) {
 }
 struct State {
     Entry entries[MaxEntries]{}; size_t count=0;
-    int defaultTarget=None,lastSelected=None,pending=None,fallback=None;
-    uint32_t created=0,ttl=180000,heartbeatAt=0,heartbeatExpiry=45000;
-    bool heartbeatSeen=false;
+    int defaultTarget=None,lastSelected=None,pending=None,fallback=None,dispatchedTarget=None;
+    uint32_t created=0,ttl=180000,heartbeatAt=0,heartbeatExpiry=45000,dispatchedAt=0;
+    bool heartbeatSeen=false,dispatchSeen=false;
     enum Behavior { Default, Last, Exit } behavior=Default;
     bool valid(int id) const { for(size_t i=0;i<count;++i) if(entries[i].id==id) return !entries[i].blocked; return false; }
     bool online(uint32_t now) const { return heartbeatSeen && uint32_t(now-heartbeatAt)<heartbeatExpiry; }
@@ -37,10 +38,17 @@ struct State {
         int id=behavior==Default?defaultTarget:behavior==Last?lastSelected:None;
         return valid(id)?id:None;
     }
+    int dispatch(uint32_t now) {
+        int target=selected(now);
+        if(target==None) return None;
+        if(dispatchSeen && target==dispatchedTarget && uint32_t(now-dispatchedAt)<DispatchGuardMs) return None;
+        dispatchedTarget=target; dispatchedAt=now; dispatchSeen=true;
+        return target;
+    }
     int request(int id,uint32_t now,bool force=false) {
         if(!valid(id)) return 400;
         if(online(now)&&!force) return 409;
-        pending=lastSelected=id; created=now; return 202;
+        pending=lastSelected=id; created=now; dispatchSeen=false; return 202;
     }
     void heartbeat(uint32_t now,int id) {
         heartbeatAt=now; heartbeatSeen=true;
@@ -54,3 +62,4 @@ struct State {
     }
 };
 }
+
