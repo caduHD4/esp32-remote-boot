@@ -25,7 +25,7 @@
 
 **Files:**
 - Modify: `platformio.ini`
-- Create: `sdkconfig.microlink.defaults`
+- Create: `sdkconfig.defaults`
 - Test: `tests/test_microlink_build_config.py`
 
 **Interfaces:**

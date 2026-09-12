@@ -17,6 +17,13 @@ firmware/include/microlink_config.generated.h
 .env*
 firmware/include/web_asset.h
 
+# PlatformIO Arduino-as-component / ESP-IDF generated files
+/CMakeLists.txt
+/firmware/src/CMakeLists.txt
+/dependencies.lock
+/managed_components/
+/sdkconfig.esp32c3_*
+
 # Native agent build outputs
 **/bin/
 **/obj/

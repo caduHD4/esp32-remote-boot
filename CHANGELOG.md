@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0-microlink-poc
+
+- Adiciona ambiente opt-in Arduino como componente do ESP-IDF com MicroLink/WireGuard para acesso pela tailnet sem hardware auxiliar.
+- Mantém `esp32c3_4mb` inalterado como build estável e oferece rollback por upload sem apagar NVS.
+- Adapta afinidade, MTU, peers e buffers ao ESP32-C3 single-core sem PSRAM.
+- Embute auth key somente a partir de arquivo local ignorado e não a expõe em serial, API ou dashboard.
+- Mostra conexão, IP Tailscale, peers e telemetria de heap na API/dashboard, preservando o acesso LAN em falhas.
+
 ## 2.1.3-experimental
 
 - Redesenha a dashboard com navegação responsiva para desktop/mobile, cards de status, ícones SVG locais, feedback de ações e acessibilidade básica.
@@ -31,4 +39,3 @@
 - Build ESP32-C3 4 MB sem OTA, testes nativos e workflows CI/release.
 
 Validação de software não substitui os testes em hardware descritos no relatório.
-

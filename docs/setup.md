@@ -16,4 +16,6 @@ Desinstalar agent Linux: `sudo systemctl disable --now remote-boot`; remova o se
 
 Atualização ESP32: upload PlatformIO padrão não faz erase-flash. Não use erase-flash se quiser manter NVS. Schema incompatível é preservado. Não há OTA. Alterou código EFI ou IP ESP32? Recompile/reinstale iPXE. Atualizar somente o firmware ESP32 não altera o binário EFI no PC.
 
+Para testar acesso remoto pelo próprio ESP32-C3, siga [MicroLink + Tailscale](microlink-tailscale.md). A variante experimental tem um environment separado; voltar a `esp32c3_4mb` não apaga a NVS.
+
 Tokens precisam ser atualizados nos agents se forem trocados na dashboard. Alterações Sinric/rede reiniciam ESP32; salve trabalho na UI primeiro.

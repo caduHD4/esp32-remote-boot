@@ -18,7 +18,7 @@ Baixe também **Source code (zip)** da mesma versão para obter os installers. A
 
 ## Primeiro uso
 
-1. Instale Python 3 e PlatformIO Core 6.1.18: `python -m pip install platformio==6.1.18`.
+1. Instale Python 3 e PlatformIO Core 6.1.18 para o firmware padrão. O POC MicroLink exige PlatformIO Core 6.1.19 ou mais recente; veja o guia específico abaixo.
 2. Opcional: copie `config.local.example.json` para `config.local.json` e preencha o SSID/senha da rede **2,4 GHz**. Esse arquivo é ignorado pelo Git, mas a senha será embutida no firmware; não o compartilhe.
 3. Extraia o repositório e execute na raiz:
 
@@ -146,6 +146,20 @@ bash ipxe/build.sh 192.0.2.10
 
 Em Linux que usa ptrace e impede LeakSanitizer: `ASAN_OPTIONS=detect_leaks=0 bash tests/run.sh` mantém AddressSanitizer/UBSan, mas não valida leaks.
 
+### POC MicroLink + Tailscale
+
+A variante `esp32c3_4mb_microlink` permite acessar a dashboard pelo IP Tailscale do próprio ESP32-C3, sem hardware auxiliar. Ela é opt-in, usa uma credencial local ignorada pelo Git e não altera o ambiente estável `esp32c3_4mb`.
+
+```bash
+pipx upgrade platformio
+cp config.microlink.example.json config.local.microlink.json
+# Preencha a auth key local antes do build.
+pio run -e esp32c3_4mb_microlink -t upload
+pio device monitor -b 115200
+```
+
+Leia [configuração, riscos, diagnóstico e rollback do MicroLink/Tailscale](docs/microlink-tailscale.md) antes de gravar essa variante experimental.
+
 Os workflows estão em `.github/workflows`. Para trabalhar localmente, clone o repositório, revise os arquivos e crie commits normalmente.
 
 ## Documentação
@@ -154,6 +168,7 @@ Os workflows estão em `.github/workflows`. Para trabalhar localmente, clone o r
 - [Arquitetura e limites](docs/architecture.md)
 - [API](docs/api.md)
 - [Dashboard](docs/dashboard.md)
+- [MicroLink + Tailscale experimental](docs/microlink-tailscale.md)
 - [Descoberta UEFI](docs/uefi-discovery.md)
 - [Sinric Pro: fluxo principal](docs/sinric.md)
 - [UKI opcional](docs/uki.md)

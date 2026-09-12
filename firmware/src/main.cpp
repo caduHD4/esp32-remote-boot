@@ -8,6 +8,7 @@
 #include <WebSocketsServer.h>
 #include <SinricPro.h>
 #include <SinricProSwitch.h>
+#include "sinricpro_interface_compat.hpp"
 #include "boot_state.hpp"
 #include "power_command.hpp"
 #include "config_policy.hpp"

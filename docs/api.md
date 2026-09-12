@@ -4,7 +4,7 @@ JSON; header `Authorization: Bearer TOKEN`. Corpo máximo aceito pelo handler: 1
 
 | Método / rota | Permissão | Corpo/resultado |
 |---|---|---|
-| GET `/api/v1/status` | admin | online, os, IP, RSSI, heap, uptime, Sinric, padrão/pending/última escolha |
+| GET `/api/v1/status` | admin | online, os, IP, RSSI, heap, uptime, Sinric, Tailscale, padrão/pending/última escolha |
 | GET `/api/v1/config` | admin | configuração sem valores secretos |
 | PUT `/api/v1/config` | admin | patch de campos permitidos; valida, salva e reinicia ESP32 |
 | GET `/api/v1/systems` | admin/agent | `{systems:[{id,name,hidden,blocked}]}` |
@@ -25,6 +25,12 @@ Pending TTL: 30–3.600 s, padrão 180. Agent nativo: WebSocket/keepalive 60 s, 
 Schema/config: veja `config.example.json` para patch sanitizado; ele não contém credenciais utilizáveis. `default_target`, `fallback_boot_id` aceitam string vazia para nenhum. `physical_boot_behavior`: `default_target`, `last_selected`, `exit_to_firmware`. Sinric slots: `[{device_id:"ID_REAL",boot_id:"0001"}]` ou `boot_id:"default"`. Ativar Sinric sem App Key/App Secret válidos retorna `SINRIC_CREDENTIALS_REQUIRED`.
 
 Erros são `{error:"CODIGO"}`. 400 entrada inválida, 401/403 autenticação, 409 conflito, 413 corpo grande, 429 cooldown, 500 NVS, 503 indisponível. A API não garante que WoL acordou a máquina: 202 confirma apenas fila aceita.
+
+## Estado MicroLink/Tailscale
+
+No firmware padrão, `tailscale` retorna `built:false` e `state:"disabled"`. No ambiente experimental, o objeto contém `built`, `configured`, `connected`, `state`, `ip`, `peers`, `heap_free`, `heap_minimum` e `largest_block`. Estados possíveis incluem `not_configured`, `config_locked`, `setup_mode`, `wifi_offline`, `starting`, `connecting`, `registering`, `connected`, `reconnecting` e `error`.
+
+A API nunca retorna a auth key. Ela continua protegida pelo Bearer token administrativo tanto na LAN quanto pelo IP Tailscale. Falha do túnel não muda a disponibilidade da API na LAN.
 
 ## Shutdown
 
