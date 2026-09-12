@@ -21,7 +21,19 @@ function validateSinric(input){
   if(enabled&&clean.length===0)warnings.no_slots=true;
   return {valid:Object.keys(errors).length===0,errors,warnings,slots:clean};
 }
-globalThis.RemoteBootValidation={validateSinric};
+function formatTailscaleStatus(tailscale={}){
+  if(!tailscale.built)return {label:'DESATIVADO',detail:'Firmware padrão',tone:'neutral'};
+  if(!tailscale.configured)return {label:'NÃO CONFIGURADO',detail:'Adicione a chave no build',tone:'warning'};
+  if(tailscale.connected){
+    const peerCount=Number(tailscale.peers)||0;
+    return {label:'CONECTADO',detail:(tailscale.ip||'IP pendente')+' • '+peerCount+' peers',tone:'online'};
+  }
+  if(tailscale.state==='error')return {label:'ERRO',detail:'Acesso local preservado',tone:'error'};
+  const states={config_locked:['BLOQUEADO','Revise a configuração'],setup_mode:['AGUARDANDO','Conclua a configuração local'],wifi_offline:['AGUARDANDO WI-FI','Acesso local preservado'],starting:['INICIANDO','Preparando conexão'],connecting:['CONECTANDO','Negociando acesso remoto'],registering:['REGISTRANDO','Aguardando a tailnet'],reconnecting:['RECONECTANDO','Acesso local preservado']};
+  const value=states[tailscale.state]||['AGUARDANDO','Acesso local preservado'];
+  return {label:value[0],detail:value[1],tone:'warning'};
+}
+globalThis.RemoteBootValidation={validateSinric,formatTailscaleStatus};
 if(typeof document!=='undefined'){
 const $=id=>document.getElementById(id);
 let token='',cfg={},systems=[],slots=[],refreshTimer;
@@ -155,6 +167,7 @@ function updateStatusCards(state){
   $('cardEsp').textContent=state.ip||'Sem IP';$('cardVersion').textContent=state.version||'Versão desconhecida';
   $('cardWifi').textContent=state.rssi>-67?'Sinal ótimo':state.rssi>-75?'Sinal bom':'Sinal fraco';$('cardRssi').textContent=state.rssi+' dBm';
   $('cardSinric').textContent=state.sinric_online?'ONLINE':cfg.sinric_enabled?'OFFLINE':'DESATIVADO';$('cardPending').textContent=state.pending_target?'Pendente: '+state.pending_target:'Nenhum boot pendente';
+  const tailscale=formatTailscaleStatus(state.tailscale);$('cardTailscale').textContent=tailscale.label;$('cardTailscale').className='status-value '+tailscale.tone;$('cardTailscaleDetail').textContent=tailscale.detail;
   $('topBadge').textContent=state.online?'PC online':'PC offline';$('topBadge').className='badge '+(state.online?'online':'offline');$('sideDot').className='status-dot '+(state.online?'online':'');$('sideStatus').textContent=state.online?'PC online':'PC offline'
 }
 async function status(){

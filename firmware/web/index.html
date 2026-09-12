@@ -25,6 +25,7 @@
   <symbol id="icon-up" viewBox="0 0 24 24"><path d="m12 5 7 7-1.4 1.4-4.6-4.6V20h-2V8.8l-4.6 4.6L5 12l7-7Z"/></symbol>
   <symbol id="icon-terminal" viewBox="0 0 24 24"><path d="M3 4h18v16H3V4Zm2 2v12h14V6H5Zm2 3 3 3-3 3-1.4-1.4 1.6-1.6-1.6-1.6L7 9Zm5 5h5v2h-5v-2Z"/></symbol>
   <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm-1 6h2v7h-2V8Zm0 9h2v2h-2v-2Z"/></symbol>
+  <symbol id="icon-link" viewBox="0 0 24 24"><path d="M10.6 13.4a1 1 0 0 1 0-1.4l4-4a4 4 0 1 1 5.7 5.7l-2.6 2.6-1.4-1.4 2.6-2.6a2 2 0 1 0-2.8-2.8l-4 4a1 1 0 0 1-1.5-.1Zm2.8-2.8a1 1 0 0 1 0 1.4l-4 4a2 2 0 1 0 2.8 2.8l2.6-2.6 1.4 1.4-2.6 2.6a4 4 0 1 1-5.7-5.7l4-4a1 1 0 0 1 1.5.1Z"/></symbol>
 </svg>
 
 <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
@@ -79,6 +80,7 @@
         <article class="status-card"><div class="status-icon green"><svg><use href="#icon-system"/></svg></div><div><span>ESP32</span><strong id="cardEsp" class="skeleton">Carregando</strong><small id="cardVersion">Versão</small></div></article>
         <article class="status-card"><div class="status-icon blue"><svg><use href="#icon-wifi"/></svg></div><div><span>Rede Wi-Fi</span><strong id="cardWifi" class="skeleton">Carregando</strong><small id="cardRssi">RSSI</small></div></article>
         <article class="status-card"><div class="status-icon violet"><svg><use href="#icon-cloud"/></svg></div><div><span>Sinric Pro</span><strong id="cardSinric" class="skeleton">Carregando</strong><small id="cardPending">Nenhum boot pendente</small></div></article>
+        <article class="status-card"><div class="status-icon amber"><svg><use href="#icon-link"/></svg></div><div><span>Tailscale</span><strong id="cardTailscale" class="skeleton">Carregando</strong><small id="cardTailscaleDetail">Verificando MicroLink</small></div></article>
       </div>
       <div class="panel">
         <div class="panel-head"><div><h2>Inicialização rápida</h2><p>Escolha o próximo sistema sem sair desta tela.</p></div><button type="button" class="button ghost compact" data-view="boot">Ver todos</button></div>
@@ -141,4 +143,3 @@
 <script>{{APP_JS}}</script>
 </body>
 </html>
-
