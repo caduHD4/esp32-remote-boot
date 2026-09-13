@@ -46,3 +46,10 @@ assert "SinricProInterface::getTimestamp" in compat
 assert "SinricProInterface::isConnected" in compat
 assert "SinricProDeviceInterface::getTimestamp" in compat
 assert '#include "sinricpro_interface_compat.hpp"' in (root / "firmware/src/main.cpp").read_text(encoding="utf-8")
+
+readme = (root / "README.md").read_text(encoding="utf-8")
+microlink_guide = (root / "docs/microlink-tailscale.md").read_text(encoding="utf-8")
+assert "pipx install --force platformio==6.1.19" in readme
+assert "pipx install --force platformio==6.1.19" in microlink_guide
+assert "6.1.19 ou mais recente" not in readme
+assert "6.1.19 ou mais recente" not in microlink_guide

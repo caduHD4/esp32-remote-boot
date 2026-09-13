@@ -4,7 +4,7 @@ Esta branch contém uma variante experimental que coloca o próprio ESP32-C3 na 
 
 ## Antes de começar
 
-- Use PlatformIO Core 6.1.19 ou mais recente. No CachyOS com instalação via `pipx`: `pipx upgrade platformio`.
+- Use exatamente o PlatformIO Core 6.1.19. A versão 6.2.0 tem uma incompatibilidade conhecida com o SCons usado pelo PIOArduino. No CachyOS com instalação via `pipx`: `pipx install --force platformio==6.1.19`.
 - O computador ou celular que acessará a dashboard precisa estar conectado à mesma tailnet.
 - Crie uma auth key em **Tailscale Admin Console → Settings → Keys**. Para o primeiro teste, use chave de uso único e não marque o dispositivo como ephemeral. Tags são opcionais e devem respeitar a política da sua tailnet.
 - Este é um POC para placa sem PSRAM. Comece com uma tailnet pequena e observe a memória no card/API.
@@ -32,7 +32,7 @@ Edite somente o arquivo local:
 ## Build, gravação e monitor no CachyOS
 
 ```bash
-pipx upgrade platformio
+pipx install --force platformio==6.1.19
 pio --version
 pio run -e esp32c3_4mb_microlink
 pio run -e esp32c3_4mb_microlink -t upload

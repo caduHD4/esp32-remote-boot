@@ -18,7 +18,7 @@ Baixe também **Source code (zip)** da mesma versão para obter os installers. A
 
 ## Primeiro uso
 
-1. Instale Python 3 e PlatformIO Core 6.1.18 para o firmware padrão. O POC MicroLink exige PlatformIO Core 6.1.19 ou mais recente; veja o guia específico abaixo.
+1. Instale Python 3 e PlatformIO Core 6.1.18 para o firmware padrão. O POC MicroLink está fixado no PlatformIO Core 6.1.19; a versão 6.2.0 tem uma incompatibilidade conhecida com o SCons usado pelo PIOArduino. Veja o guia específico abaixo.
 2. Opcional: copie `config.local.example.json` para `config.local.json` e preencha o SSID/senha da rede **2,4 GHz**. Esse arquivo é ignorado pelo Git, mas a senha será embutida no firmware; não o compartilhe.
 3. Extraia o repositório e execute na raiz:
 
@@ -151,7 +151,7 @@ Em Linux que usa ptrace e impede LeakSanitizer: `ASAN_OPTIONS=detect_leaks=0 bas
 A variante `esp32c3_4mb_microlink` permite acessar a dashboard pelo IP Tailscale do próprio ESP32-C3, sem hardware auxiliar. Ela é opt-in, usa uma credencial local ignorada pelo Git e não altera o ambiente estável `esp32c3_4mb`.
 
 ```bash
-pipx upgrade platformio
+pipx install --force platformio==6.1.19
 cp config.microlink.example.json config.local.microlink.json
 # Preencha a auth key local antes do build.
 pio run -e esp32c3_4mb_microlink -t upload

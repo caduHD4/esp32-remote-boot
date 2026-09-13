@@ -1390,12 +1390,15 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
      * This is critical because a single H2 frame can span multiple Noise frames
      * (v1 does the same with h2_buffer).
      * Smart timeout: extend to 60s for large tailnets (300+ peers = 240KB+). */
-    uint8_t *h2_recv = ml_psram_malloc(ML_H2_BUFFER_SIZE);  /* 512KB for 300+ peer tailnets */
-    if (!h2_recv) return -1;
+    uint8_t *h2_recv = ml_psram_malloc(ML_H2_BUFFER_SIZE);  /* Shared H2/JSON buffer on no-PSRAM targets */
+    if (!h2_recv) {
+        ESP_LOGE(TAG, "MapResponse buffer allocation failed: need=%dKB free=%lu largest=%lu",
+                 (int)(ML_H2_BUFFER_SIZE / 1024),
+                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        return -1;
+    }
     size_t h2_total = 0;
-
-    uint8_t *resp_buf = ml_psram_malloc(ML_JSON_BUFFER_SIZE);
-    if (!resp_buf) { free(h2_recv); return -1; }
     size_t json_total = 0;
 
     /* Set extended recv timeout for large MapResponse (60 seconds) */
@@ -1511,15 +1514,20 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
         }
 
         if (f_type == 0x00 && f_len > 0) {  /* DATA frame */
-            if (json_total + f_len < ML_JSON_BUFFER_SIZE) {
-                memcpy(resp_buf + json_total, h2_recv + fpos, f_len);
+            if (json_total + f_len < ML_H2_BUFFER_SIZE) {
+                /* Compact DATA payloads in-place. json_total always trails fpos,
+                 * and memmove handles any overlap between source and target. */
+                memmove(h2_recv + json_total, h2_recv + fpos, f_len);
                 json_total += f_len;
+            } else {
+                ESP_LOGE(TAG, "MapResponse JSON exceeds shared %dKB buffer",
+                         (int)(ML_H2_BUFFER_SIZE / 1024));
             }
         }
 
         fpos += f_len;
     }
-    free(h2_recv);
+    uint8_t *resp_buf = h2_recv;
 
     /* Send connection-level WINDOW_UPDATE to replenish HTTP/2 flow control.
      * Stream 3 is already closed (END_STREAM received), so only update stream 0.
