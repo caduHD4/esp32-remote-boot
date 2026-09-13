@@ -36,7 +36,7 @@ assert settings["CONFIG_MBEDTLS_PSK_MODES"] == "y"
 assert settings["CONFIG_MBEDTLS_KEY_EXCHANGE_PSK"] == "y"
 assert settings["CONFIG_ML_MAX_PEERS"] == "8"
 assert settings["CONFIG_ML_NVS_MAX_PEERS"] == "16"
-assert settings["CONFIG_ML_H2_BUFFER_SIZE_KB"] == "64"
+assert settings["CONFIG_ML_H2_BUFFER_SIZE_KB"] == "32"
 assert settings["CONFIG_ML_JSON_BUFFER_SIZE_KB"] == "64"
 
 compat = (root / "firmware/include/sinricpro_interface_compat.hpp").read_text(encoding="utf-8")

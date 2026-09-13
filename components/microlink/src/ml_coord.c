@@ -1415,26 +1415,26 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
      * (60s) before proceeding, which dominates connection time on cellular. */
     bool got_end_stream = false;
     for (int read_count = 0; read_count < 200; read_count++) {
-        uint8_t *frame_buf = ml_psram_malloc(ML_NOISE_FRAME_BUFFER_SIZE);
-        if (!frame_buf) break;
+        size_t remaining = ML_H2_BUFFER_SIZE - h2_total - 1;
+        if (remaining == 0) {
+            ESP_LOGE(TAG, "MapResponse exceeded shared %dKB buffer",
+                     (int)(ML_H2_BUFFER_SIZE / 1024));
+            break;
+        }
 
-        int frame_len = noise_recv(ml, noise, frame_buf, ML_NOISE_FRAME_BUFFER_SIZE);
+        /* Decrypt directly into the accumulated H2 buffer. The former
+         * 24KB plaintext staging allocation made this path impossible on
+         * ESP32-C3 once the H2 buffer was allocated. */
+        int frame_len = noise_recv(ml, noise, h2_recv + h2_total, remaining);
         if (frame_len <= 0) {
-            free(frame_buf);
+            ESP_LOGE(TAG, "MapResponse Noise receive failed: frame=%d free=%lu largest=%lu",
+                     read_count, (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                     (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
             break;
         }
 
-        /* Append decrypted data to h2_recv */
-        if (h2_total + frame_len < ML_H2_BUFFER_SIZE) {
-            memcpy(h2_recv + h2_total, frame_buf, frame_len);
-            h2_total += frame_len;
-            window_consumed += frame_len;
-        } else {
-            ESP_LOGW(TAG, "H2 buffer full at %dKB, truncating", (int)(h2_total / 1024));
-            free(frame_buf);
-            break;
-        }
-        free(frame_buf);
+        h2_total += frame_len;
+        window_consumed += frame_len;
 
         /* Scan newly accumulated data for H2 END_STREAM flag.
          * H2 frame header: 3 bytes length + 1 byte type + 1 byte flags + 4 bytes stream ID.
