@@ -22,6 +22,7 @@
  */
 
 #include "microlink_internal.h"
+#include "ml_json_scan.h"
 #include "x25519.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -32,6 +33,7 @@
 #include "lwip/netdb.h"
 #include "mbedtls/base64.h"
 #include <string.h>
+#include <stdlib.h>
 #include <errno.h>
 
 static const char *TAG = "ml_coord";
@@ -1009,6 +1011,78 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
  * State: FETCH_PEERS - Send MapRequest, parse MapResponse
  * ========================================================================== */
 
+static void queue_peer_from_json(microlink_t *ml, cJSON *peer) {
+    ml_peer_update_t *update = ml_psram_calloc(1, sizeof(ml_peer_update_t));
+    if (!update) return;
+
+    update->action = ML_PEER_ADD;
+    cJSON *name = cJSON_GetObjectItem(peer, "Name");
+    if (name && name->valuestring) {
+        strncpy(update->hostname, name->valuestring, sizeof(update->hostname) - 1);
+        size_t hlen = strlen(update->hostname);
+        if (hlen > 0 && update->hostname[hlen - 1] == '.') update->hostname[hlen - 1] = '\0';
+    }
+
+    cJSON *key = cJSON_GetObjectItem(peer, "Key");
+    if (key && key->valuestring) {
+        const char *hex = key->valuestring;
+        if (strncmp(hex, "nodekey:", 8) == 0) hex += 8;
+        hex_to_bytes(hex, update->public_key, 32);
+    }
+    cJSON *disco = cJSON_GetObjectItem(peer, "DiscoKey");
+    if (disco && disco->valuestring) {
+        const char *hex = disco->valuestring;
+        if (strncmp(hex, "discokey:", 9) == 0) hex += 9;
+        hex_to_bytes(hex, update->disco_key, 32);
+    }
+
+    cJSON *addresses = cJSON_GetObjectItem(peer, "Addresses");
+    if (addresses && cJSON_GetArraySize(addresses) > 0) {
+        const char *addr = cJSON_GetArrayItem(addresses, 0)->valuestring;
+        unsigned a, b, c, d;
+        if (addr && sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+            update->vpn_ip = (a << 24) | (b << 16) | (c << 8) | d;
+        }
+    }
+
+    cJSON *peer_home_derp = cJSON_GetObjectItem(peer, "HomeDERP");
+    if (peer_home_derp && cJSON_IsNumber(peer_home_derp) && peer_home_derp->valueint > 0) {
+        update->derp_region = (uint16_t)peer_home_derp->valueint;
+    } else {
+        cJSON *derp = cJSON_GetObjectItem(peer, "DERP");
+        unsigned dr;
+        if (derp && derp->valuestring &&
+            sscanf(derp->valuestring, "127.3.3.40:%u", &dr) == 1) {
+            update->derp_region = (uint16_t)dr;
+        }
+    }
+
+    cJSON *endpoints = cJSON_GetObjectItem(peer, "Endpoints");
+    if (endpoints) {
+        cJSON *ep;
+        cJSON_ArrayForEach(ep, endpoints) {
+            if (update->endpoint_count >= ML_MAX_ENDPOINTS) break;
+            unsigned ea, eb, ec, ed, eport;
+            if (ep->valuestring &&
+                sscanf(ep->valuestring, "%u.%u.%u.%u:%u", &ea, &eb, &ec, &ed, &eport) == 5) {
+                int index = update->endpoint_count++;
+                update->endpoints[index].ip = (ea << 24) | (eb << 16) | (ec << 8) | ed;
+                update->endpoints[index].port = (uint16_t)eport;
+                update->endpoints[index].is_ipv6 = false;
+            }
+        }
+    }
+
+    char ip_str[16];
+    microlink_ip_to_str(update->vpn_ip, ip_str);
+    ESP_LOGI(TAG, "  Peer: %s (%s) derp=%d eps=%d",
+             update->hostname, ip_str, update->derp_region, update->endpoint_count);
+    if (xQueueSend(ml->peer_update_queue, &update, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Peer update queue full, dropping %s", update->hostname);
+        free(update);
+    }
+}
+
 static void parse_peers_from_map_response(microlink_t *ml, cJSON *root) {
     /* Try all field names used by Tailscale (copied from v1 lines 3176-3184):
      *   "Peers"        - Full peer list (initial Stream=false response)
@@ -1033,99 +1107,7 @@ static void parse_peers_from_map_response(microlink_t *ml, cJSON *root) {
 
     cJSON *peer;
     cJSON_ArrayForEach(peer, peers) {
-        /* Allocate peer update (freed by wg_mgr after processing) */
-        ml_peer_update_t *update = ml_psram_calloc(1, sizeof(ml_peer_update_t));
-        if (!update) continue;
-
-        update->action = ML_PEER_ADD;
-
-        /* Hostname */
-        cJSON *name = cJSON_GetObjectItem(peer, "Name");
-        if (name && name->valuestring) {
-            strncpy(update->hostname, name->valuestring, sizeof(update->hostname) - 1);
-            /* Strip trailing dot from FQDN */
-            size_t hlen = strlen(update->hostname);
-            if (hlen > 0 && update->hostname[hlen - 1] == '.') {
-                update->hostname[hlen - 1] = '\0';
-            }
-        }
-
-        /* NodeKey: "nodekey:HEX..." */
-        cJSON *key = cJSON_GetObjectItem(peer, "Key");
-        if (key && key->valuestring) {
-            const char *hex = key->valuestring;
-            if (strncmp(hex, "nodekey:", 8) == 0) hex += 8;
-            hex_to_bytes(hex, update->public_key, 32);
-        }
-
-        /* DiscoKey: "discokey:HEX..." */
-        cJSON *disco = cJSON_GetObjectItem(peer, "DiscoKey");
-        if (disco && disco->valuestring) {
-            const char *hex = disco->valuestring;
-            if (strncmp(hex, "discokey:", 9) == 0) hex += 9;
-            hex_to_bytes(hex, update->disco_key, 32);
-        }
-
-        /* VPN IP from Addresses */
-        cJSON *addresses = cJSON_GetObjectItem(peer, "Addresses");
-        if (addresses && cJSON_GetArraySize(addresses) > 0) {
-            const char *addr = cJSON_GetArrayItem(addresses, 0)->valuestring;
-            if (addr) {
-                unsigned a, b, c, d;
-                /* Handle CIDR notation (e.g., "100.64.1.2/32") */
-                if (sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
-                    update->vpn_ip = (a << 24) | (b << 16) | (c << 8) | d;
-                }
-            }
-        }
-
-        /* DERP region — try modern HomeDERP (int) first, then legacy DERP string */
-        cJSON *peer_home_derp = cJSON_GetObjectItem(peer, "HomeDERP");
-        if (peer_home_derp && cJSON_IsNumber(peer_home_derp) && peer_home_derp->valueint > 0) {
-            update->derp_region = (uint16_t)peer_home_derp->valueint;
-        } else {
-            cJSON *derp = cJSON_GetObjectItem(peer, "DERP");
-            if (derp && derp->valuestring) {
-                /* Format: "127.3.3.40:N" where N is the region number */
-                unsigned dr;
-                if (sscanf(derp->valuestring, "127.3.3.40:%u", &dr) == 1) {
-                    update->derp_region = (uint16_t)dr;
-                }
-            }
-        }
-
-        /* Endpoints */
-        cJSON *endpoints = cJSON_GetObjectItem(peer, "Endpoints");
-        if (endpoints) {
-            int ep_count = 0;
-            cJSON *ep;
-            cJSON_ArrayForEach(ep, endpoints) {
-                if (ep_count >= ML_MAX_ENDPOINTS) break;
-                if (ep->valuestring) {
-                    unsigned ea, eb, ec, ed, eport;
-                    if (sscanf(ep->valuestring, "%u.%u.%u.%u:%u",
-                               &ea, &eb, &ec, &ed, &eport) == 5) {
-                        update->endpoints[ep_count].ip =
-                            (ea << 24) | (eb << 16) | (ec << 8) | ed;
-                        update->endpoints[ep_count].port = (uint16_t)eport;
-                        update->endpoints[ep_count].is_ipv6 = false;
-                        ep_count++;
-                    }
-                }
-            }
-            update->endpoint_count = ep_count;
-        }
-
-        char ip_str[16];
-        microlink_ip_to_str(update->vpn_ip, ip_str);
-        ESP_LOGI(TAG, "  Peer: %s (%s) derp=%d eps=%d",
-                 update->hostname, ip_str, update->derp_region, update->endpoint_count);
-
-        /* Send to wg_mgr task via queue */
-        if (xQueueSend(ml->peer_update_queue, &update, pdMS_TO_TICKS(100)) != pdTRUE) {
-            ESP_LOGW(TAG, "Peer update queue full, dropping %s", update->hostname);
-            free(update);
-        }
+        queue_peer_from_json(ml, peer);
     }
 
 check_removed:
@@ -1224,6 +1206,219 @@ check_removed:
             patch = patch->next;
         }
     }
+}
+
+/* Initial MapResponses contain a large DERP map and rich node metadata. On
+ * targets without PSRAM, building one cJSON DOM for the complete response can
+ * consume more memory than the transport buffer itself. These helpers scan
+ * the JSON in place and retain only the fields used by MicroLink. */
+static bool slice_string(ml_json_slice_t value, char *dest, size_t dest_size) {
+    if (!dest || dest_size == 0 || value.len < 2 || value.ptr[0] != '"' ||
+        value.ptr[value.len - 1] != '"') return false;
+    size_t len = value.len - 2;
+    if (len >= dest_size) len = dest_size - 1;
+    memcpy(dest, value.ptr + 1, len);
+    dest[len] = '\0';
+    return true;
+}
+
+static bool slice_uint(ml_json_slice_t value, unsigned *result) {
+    if (!result || value.len == 0 || value.len >= 16) return false;
+    char number[16];
+    memcpy(number, value.ptr, value.len);
+    number[value.len] = '\0';
+    char *end = NULL;
+    unsigned long parsed = strtoul(number, &end, 10);
+    if (end != number + value.len) return false;
+    *result = (unsigned)parsed;
+    return true;
+}
+
+static bool parse_initial_self_node(microlink_t *ml, ml_json_slice_t root) {
+    ml_json_slice_t node;
+    if (!ml_json_object_get(root, "Node", &node)) return false;
+
+    ml_json_slice_t value;
+    if (ml->vpn_ip == 0 && ml_json_object_get(node, "Addresses", &value)) {
+        size_t cursor = 0;
+        ml_json_slice_t address;
+        char address_text[48];
+        unsigned a, b, c, d;
+        if (ml_json_array_next(value, &cursor, &address) &&
+            slice_string(address, address_text, sizeof(address_text)) &&
+            sscanf(address_text, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+            ml->vpn_ip = (a << 24) | (b << 16) | (c << 8) | d;
+            char ip_str[16];
+            microlink_ip_to_str(ml->vpn_ip, ip_str);
+            ESP_LOGI(TAG, "Our VPN IP: %s", ip_str);
+        }
+    }
+
+    unsigned region = 0;
+    if (ml_json_object_get(node, "HomeDERP", &value)) slice_uint(value, &region);
+    if (region == 0 && ml_json_object_get(node, "DERP", &value)) {
+        char derp[48];
+        if (slice_string(value, derp, sizeof(derp))) {
+            const char *colon = strrchr(derp, ':');
+            if (colon) region = (unsigned)atoi(colon + 1);
+        }
+    }
+    ml->derp_home_region = (uint16_t)(region > 0 ? region : ML_DERP_REGION);
+    ESP_LOGI(TAG, "Home DERP region: %d (selective parser)", ml->derp_home_region);
+
+    if (ml_json_object_get(node, "KeyExpiry", &value)) {
+        char expiry[40];
+        int yr, mo, dy, hr, mn, sc;
+        if (slice_string(value, expiry, sizeof(expiry)) &&
+            sscanf(expiry, "%d-%d-%dT%d:%d:%d", &yr, &mo, &dy, &hr, &mn, &sc) >= 6) {
+            int64_t days = 0;
+            for (int y = 1970; y < yr; y++)
+                days += (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
+            static const int mdays[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+            for (int m = 1; m < mo; m++) {
+                days += mdays[m];
+                if (m == 2 && (yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0))) days++;
+            }
+            days += dy - 1;
+            ml->key_expiry_epoch = days * 86400 + hr * 3600 + mn * 60 + sc;
+        }
+    }
+    ml->key_expired = ml_json_object_get(node, "Expired", &value) &&
+                      value.len == 4 && memcmp(value.ptr, "true", 4) == 0;
+    return true;
+}
+
+static void parse_initial_peer(microlink_t *ml, ml_json_slice_t peer) {
+    ml_peer_update_t *update = ml_psram_calloc(1, sizeof(ml_peer_update_t));
+    if (!update) return;
+    update->action = ML_PEER_ADD;
+
+    ml_json_slice_t value;
+    if (ml_json_object_get(peer, "Name", &value)) {
+        slice_string(value, update->hostname, sizeof(update->hostname));
+        size_t len = strlen(update->hostname);
+        if (len > 0 && update->hostname[len - 1] == '.') update->hostname[len - 1] = '\0';
+    }
+    char text[96];
+    if (ml_json_object_get(peer, "Key", &value) && slice_string(value, text, sizeof(text))) {
+        hex_to_bytes(strncmp(text, "nodekey:", 8) == 0 ? text + 8 : text,
+                     update->public_key, 32);
+    }
+    if (ml_json_object_get(peer, "DiscoKey", &value) && slice_string(value, text, sizeof(text))) {
+        hex_to_bytes(strncmp(text, "discokey:", 9) == 0 ? text + 9 : text,
+                     update->disco_key, 32);
+    }
+    if (ml_json_object_get(peer, "Addresses", &value)) {
+        size_t cursor = 0;
+        ml_json_slice_t item;
+        unsigned a, b, c, d;
+        if (ml_json_array_next(value, &cursor, &item) &&
+            slice_string(item, text, sizeof(text)) &&
+            sscanf(text, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+            update->vpn_ip = (a << 24) | (b << 16) | (c << 8) | d;
+        }
+    }
+    unsigned region = 0;
+    if (ml_json_object_get(peer, "HomeDERP", &value)) slice_uint(value, &region);
+    if (region == 0 && ml_json_object_get(peer, "DERP", &value) &&
+        slice_string(value, text, sizeof(text))) {
+        sscanf(text, "127.3.3.40:%u", &region);
+    }
+    update->derp_region = (uint16_t)region;
+
+    if (ml_json_object_get(peer, "Endpoints", &value)) {
+        size_t cursor = 0;
+        ml_json_slice_t item;
+        while (update->endpoint_count < ML_MAX_ENDPOINTS &&
+               ml_json_array_next(value, &cursor, &item)) {
+            unsigned a, b, c, d, port;
+            if (slice_string(item, text, sizeof(text)) &&
+                sscanf(text, "%u.%u.%u.%u:%u", &a, &b, &c, &d, &port) == 5) {
+                int index = update->endpoint_count++;
+                update->endpoints[index].ip = (a << 24) | (b << 16) | (c << 8) | d;
+                update->endpoints[index].port = (uint16_t)port;
+            }
+        }
+    }
+
+    char ip_str[16];
+    microlink_ip_to_str(update->vpn_ip, ip_str);
+    ESP_LOGI(TAG, "  Peer: %s (%s) derp=%d eps=%d",
+             update->hostname, ip_str, update->derp_region, update->endpoint_count);
+    if (xQueueSend(ml->peer_update_queue, &update, pdMS_TO_TICKS(100)) != pdTRUE) free(update);
+}
+
+static int parse_initial_map_response(microlink_t *ml, const char *json, size_t len) {
+    ml_json_slice_t root = {json, len};
+    ml_json_slice_t peers;
+    bool parsed_self = parse_initial_self_node(ml, root);
+
+    const char *peer_fields[] = {"Peers", "PeersChanged", "peers"};
+    bool found_peers = false;
+    for (size_t i = 0; i < sizeof(peer_fields) / sizeof(peer_fields[0]); i++) {
+        if (ml_json_object_get(root, peer_fields[i], &peers)) {
+            found_peers = true;
+            break;
+        }
+    }
+    if (found_peers) {
+        int count = 0;
+        size_t cursor = 0;
+        ml_json_slice_t peer;
+        while (ml_json_array_next(peers, &cursor, &peer)) {
+            parse_initial_peer(ml, peer);
+            count++;
+        }
+        ESP_LOGI(TAG, "MapResponse: %d peers (selective parser)", count);
+    }
+
+    ml_json_slice_t derp_map, regions, region_json;
+    char region_key[8];
+    snprintf(region_key, sizeof(region_key), "%u", ml->derp_home_region);
+    bool parsed_derp = false;
+    if (ml_json_object_get(root, "DERPMap", &derp_map) &&
+        ml_json_object_get(derp_map, "Regions", &regions) &&
+        ml_json_object_get(regions, region_key, &region_json)) {
+        cJSON *region = cJSON_ParseWithLength(region_json.ptr, region_json.len);
+        if (region) {
+            ml->derp_region_count = 1;
+            ml_derp_region_t *r = &ml->derp_regions[0];
+            memset(r, 0, sizeof(*r));
+            cJSON *item = cJSON_GetObjectItem(region, "RegionID");
+            r->region_id = item ? (uint16_t)item->valuedouble : ml->derp_home_region;
+            item = cJSON_GetObjectItem(region, "RegionCode");
+            if (item && item->valuestring) strncpy(r->code, item->valuestring, sizeof(r->code) - 1);
+            item = cJSON_GetObjectItem(region, "Avoid");
+            r->avoid = item && cJSON_IsTrue(item);
+            cJSON *nodes = cJSON_GetObjectItem(region, "Nodes");
+            cJSON *node;
+            cJSON_ArrayForEach(node, nodes) {
+                if (r->node_count >= ML_MAX_DERP_NODES) break;
+                ml_derp_node_t *n = &r->nodes[r->node_count++];
+                cJSON *field = cJSON_GetObjectItem(node, "HostName");
+                if (field && field->valuestring) strncpy(n->hostname, field->valuestring, sizeof(n->hostname) - 1);
+                field = cJSON_GetObjectItem(node, "IPv4");
+                if (field && field->valuestring) strncpy(n->ipv4, field->valuestring, sizeof(n->ipv4) - 1);
+                field = cJSON_GetObjectItem(node, "IPv6");
+                if (field && field->valuestring) strncpy(n->ipv6, field->valuestring, sizeof(n->ipv6) - 1);
+                field = cJSON_GetObjectItem(node, "STUNPort");
+                if (field) n->stun_port = (uint16_t)field->valuedouble;
+                field = cJSON_GetObjectItem(node, "DERPPort");
+                if (field) n->derp_port = (uint16_t)field->valuedouble;
+                field = cJSON_GetObjectItem(node, "STUNOnly");
+                n->stun_only = field && cJSON_IsTrue(field);
+            }
+            ESP_LOGI(TAG, "DERPMap: selected region %d (%d nodes)", r->region_id, r->node_count);
+            parsed_derp = r->node_count > 0;
+            cJSON_Delete(region);
+        }
+    }
+    if (!parsed_self || !found_peers || !parsed_derp || ml->vpn_ip == 0) {
+        ESP_LOGE(TAG, "Incomplete MapResponse: self=%d peers=%d derp=%d vpn_ip=%d",
+                 parsed_self, found_peers, parsed_derp, ml->vpn_ip != 0);
+        return -1;
+    }
+    return 0;
 }
 
 /* Add Endpoints + EndpointTypes arrays to a MapRequest JSON object.
@@ -1489,6 +1684,13 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
     rcv_tv.tv_sec = 5;
     ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
 
+    if (!got_end_stream) {
+        ESP_LOGE(TAG, "MapResponse ended before H2 END_STREAM; discarding %dKB partial response",
+                 (int)(h2_total / 1024));
+        free(h2_recv);
+        return -1;
+    }
+
     ESP_LOGI(TAG, "Accumulated %dKB of H2 data from Noise frames (%lums)",
              (int)(h2_total / 1024),
              (unsigned long)(ml_get_time_ms() - recv_start_ms));
@@ -1578,6 +1780,17 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
         ESP_LOGW(TAG, "No '{' found in first 8 bytes of MapResponse!");
     }
 
+    int parse_result = parse_initial_map_response(ml, parse_start, parse_len);
+    free(resp_buf);
+
+    int64_t t_map_done = esp_timer_get_time();
+    ESP_LOGI(TAG, "[TIMING] MapResponse recv+selective-parse: %lld ms (total map: %lld ms, %dKB)",
+             (t_map_done - t_map_sent) / 1000,
+             (t_map_done - t_map_start) / 1000,
+             (int)(h2_total / 1024));
+    return parse_result;
+
+#if 0 /* Legacy full-DOM parser retained temporarily for comparison. */
     /* Null-terminate */
     char saved = parse_start[parse_len];
     parse_start[parse_len] = '\0';
@@ -1794,6 +2007,7 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
              (int)(h2_total / 1024));
 
     return 0;
+#endif
 }
 
 /* ============================================================================
