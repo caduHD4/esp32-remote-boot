@@ -71,8 +71,8 @@ menu "MicroLink V2 Configuration"
 
     config ML_H2_BUFFER_SIZE_KB
         int "HTTP/2 receive buffer size (KB)"
-        default 512
-        range 64 2048
+        default 32
+        range 32 2048
         help
             Size of the PSRAM-allocated buffer for receiving HTTP/2 frames
             from the Tailscale control plane (MapResponse).

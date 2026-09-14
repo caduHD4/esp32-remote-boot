@@ -14,6 +14,13 @@ assert not (microlink / "components/wireguard_lwip").exists(), "nested ESP-IDF c
 upstream = (microlink / "UPSTREAM.md").read_text(encoding="utf-8")
 assert "216da3300f0493b0860247d43f7af5ce29df63a5" in upstream
 
+kconfig = (microlink / "Kconfig").read_text(encoding="utf-8")
+h2_config = kconfig.split("config ML_H2_BUFFER_SIZE_KB", 1)[1].split(
+    "config ML_JSON_BUFFER_SIZE_KB", 1
+)[0]
+assert "default 32" in h2_config
+assert "range 32 2048" in h2_config
+
 coord_source = (microlink / "src/ml_coord.c").read_text(encoding="utf-8")
 fetch_peers = coord_source.split("static int do_fetch_peers", 1)[1].split(
     "static int do_start_long_poll", 1
@@ -23,6 +30,7 @@ assert "ml_psram_malloc(ML_JSON_BUFFER_SIZE)" not in fetch_peers
 assert "ml_psram_malloc(ML_NOISE_FRAME_BUFFER_SIZE)" not in fetch_peers
 assert "h2_recv + h2_total" in fetch_peers
 assert "MapResponse buffer allocation failed" in fetch_peers
+assert "if (ML_H2_BUFFER_SIZE > 65535)" in coord_source
 
 with tempfile.TemporaryDirectory() as directory:
     source = Path(directory) / "limits.cpp"
