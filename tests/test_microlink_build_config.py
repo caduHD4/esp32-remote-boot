@@ -13,7 +13,7 @@ assert stable["framework"].strip() == "arduino"
 assert "REMOTE_BOOT_ENABLE_MICROLINK" not in stable["build_flags"]
 assert {item.strip() for item in hybrid["framework"].split(",")} == {"arduino", "espidf"}
 assert "REMOTE_BOOT_ENABLE_MICROLINK=1" in hybrid["build_flags"]
-assert "embed_microlink_config.py" in hybrid["extra_scripts"]
+assert "embed_microlink_config.py" not in hybrid["extra_scripts"]
 assert "board_build.sdkconfig_defaults" not in hybrid
 ignored_libraries = {item.strip() for item in hybrid["lib_ignore"].splitlines() if item.strip()}
 assert "NetworkClientSecure" in ignored_libraries

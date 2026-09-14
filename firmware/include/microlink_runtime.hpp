@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include "microlink_lifecycle.hpp"
 
 #if defined(REMOTE_BOOT_ENABLE_MICROLINK) && REMOTE_BOOT_ENABLE_MICROLINK
@@ -28,7 +29,7 @@ struct MicrolinkSnapshot {
 
 class MicrolinkRuntime {
 public:
-    void begin(bool configLocked, bool setupMode, bool wifiConnected);
+    void begin(bool configLocked, bool setupMode, bool wifiConnected, const char* authKey, const char* deviceName);
     void tick(bool wifiConnected);
     MicrolinkSnapshot snapshot() const;
     bool beginSinricHandle(bool connected);
@@ -42,6 +43,7 @@ private:
     uint32_t sinricServiceStarted_ = 0;
     bool configLocked_ = false;
     bool setupMode_ = false;
+    std::string authKey_, deviceName_;
     MicrolinkLifecycle lifecycle_;
 #if defined(REMOTE_BOOT_ENABLE_MICROLINK) && REMOTE_BOOT_ENABLE_MICROLINK
     microlink_t* handle_ = nullptr;

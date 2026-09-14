@@ -17,8 +17,6 @@ g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_boot_dispatch.cpp" -o "$t
 "$temp/test_boot_dispatch"
 g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined "$root/tests/test_power.cpp" -o "$temp/test_power"
 "$temp/test_power"
-g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_setup_network.cpp" -o "$temp/test_setup_network"
-"$temp/test_setup_network"
 g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_sinric_policy.cpp" -o "$temp/test_sinric_policy"
 "$temp/test_sinric_policy"
 g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_microlink_policy.cpp" -o "$temp/test_microlink_policy"
