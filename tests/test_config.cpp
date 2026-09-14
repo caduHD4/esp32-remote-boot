@@ -34,6 +34,8 @@ int main() {
     JsonDocument document = legacyConfig();
     assert(rb::migrateConfig(document));
     assert(document["config_version"] == 3);
+    assert(document["setup_complete"] == true);
+    assert(document["setup_step"] == "complete");
     assert(document["ssid"] == "synthetic");
     assert(document["wifi_password"] == "wifi-secret");
     assert(document["admin_token"] == "admin-secret-value");
@@ -66,6 +68,7 @@ int main() {
     assert(redacted["wifi_password"].isNull());
     assert(redacted["admin_token"].isNull());
     assert(redacted["computers"][0]["agent_token"].isNull());
+    assert(redacted["tailscale_auth_key"].isNull());
     assert(redacted["wifi_password_set"] == true);
     assert(redacted["admin_token_set"] == true);
     assert(redacted["computers"][0]["agent_token_set"] == true);

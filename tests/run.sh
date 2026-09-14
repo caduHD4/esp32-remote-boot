@@ -8,6 +8,8 @@ g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-fram
 "$temp/test_computer_policy"
 g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer "$root/tests/test_computer_runtime.cpp" -o "$temp/test_computer_runtime"
 "$temp/test_computer_runtime"
+g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer "$root/tests/test_setup_policy.cpp" -o "$temp/test_setup_policy"
+"$temp/test_setup_policy"
 pio pkg install -e esp32c3_4mb >/dev/null
 g++ -std=c++17 -Wall -Wextra -Werror -I"$root/.pio/libdeps/esp32c3_4mb/ArduinoJson/src" "$root/tests/test_config.cpp" -o "$temp/test_config"
 "$temp/test_config"

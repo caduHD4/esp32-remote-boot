@@ -21,8 +21,9 @@ inline void migratedComputerId(const char* mac, char (&id)[10]) {
         if (id[i] >= 'A' && id[i] <= 'F') id[i] = static_cast<char>(id[i] - 'A' + 'a');
 }
 
-inline bool jsonComputerIdentitiesValid(JsonArrayConst source) {
-    if (source.isNull() || source.size() == 0 || source.size() > MaxComputers) return false;
+inline bool jsonComputerIdentitiesValid(JsonArrayConst source, bool allowEmpty = false) {
+    if (source.isNull() || source.size() > MaxComputers) return false;
+    if (source.size() == 0) return allowEmpty;
     ComputerIdentity identities[MaxComputers]{};
     size_t count = 0;
     for (JsonObjectConst computer : source) {
@@ -32,7 +33,7 @@ inline bool jsonComputerIdentitiesValid(JsonArrayConst source) {
             computer["agent_token"] | ""
         };
     }
-    return computerIdentitiesValid(identities, count);
+    return computerIdentitiesValid(identities, count, allowEmpty);
 }
 
 // Migration is transactional: unsupported or invalid legacy input never replaces the source document.
@@ -89,6 +90,8 @@ inline bool migrateConfig(JsonDocument& document) {
     }
 
     migrated["config_version"] = 3;
+    migrated["setup_complete"] = true;
+    migrated["setup_step"] = "complete";
     if (!jsonComputerIdentitiesValid(migrated["computers"].as<JsonArrayConst>())) return false;
     document.set(migrated);
     return true;
@@ -107,6 +110,9 @@ inline void redactConfig(const JsonDocument& source, JsonObject destination) {
         destination[globalPresence[i]] = std::strlen(source[globalSecrets[i]] | "") > 0;
         destination.remove(globalSecrets[i]);
     }
+
+    destination["tailscale_auth_key_set"] = std::strlen(source["tailscale_auth_key"] | "") > 0;
+    destination.remove("tailscale_auth_key");
 
     // Also redact the schema-2 location while a stored configuration is being migrated.
     destination["agent_token_set"] = std::strlen(source["agent_token"] | "") > 0;

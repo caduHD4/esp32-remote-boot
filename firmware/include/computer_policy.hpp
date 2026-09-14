@@ -70,8 +70,9 @@ inline bool validComputerId(const char* id) {
     return true;
 }
 
-inline bool computerIdentitiesValid(const ComputerIdentity* computers, size_t count) {
-    if (!computers || count == 0 || count > MaxComputers) return false;
+inline bool computerIdentitiesValid(const ComputerIdentity* computers, size_t count, bool allowEmpty = false) {
+    if (count == 0) return allowEmpty;
+    if (!computers || count > MaxComputers) return false;
     for (size_t i = 0; i < count; ++i) {
         char currentMac[18];
         if (!validComputerId(computers[i].id) ||
