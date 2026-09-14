@@ -18,22 +18,26 @@ Baixe também **Source code (zip)** da mesma versão para obter os installers. A
 
 ## Primeiro uso
 
-1. Instale Python 3 e PlatformIO Core 6.1.18 para o firmware padrão. O POC MicroLink está fixado no PlatformIO Core 6.1.19; a versão 6.2.0 tem uma incompatibilidade conhecida com o SCons usado pelo PIOArduino. Veja o guia específico abaixo.
-2. Opcional: copie `config.local.example.json` para `config.local.json` e preencha o SSID/senha da rede **2,4 GHz**. Esse arquivo é ignorado pelo Git, mas a senha será embutida no firmware; não o compartilhe.
-3. Extraia o repositório e execute na raiz:
+1. Instale Python 3 e PlatformIO Core 6.1.19.
+2. Copie `config.local.example.json` para `config.local.json` e informe o Wi-Fi 2,4 GHz. Sem credenciais válidas a ESP32 permanece offline; não existe mais SoftAP.
+3. Grave o firmware e abra o IP exibido no monitor serial:
 
    ```bash
-   pio run -e esp32c3_4mb
    pio run -e esp32c3_4mb -t upload
    pio device monitor -b 115200
    ```
 
-4. Com `config.local.json`, a ESP32 conecta diretamente à LAN e o monitor serial mostra `Local Wi-Fi connected: IP` e o token temporário da dashboard. Abra `http://IP`. Sem esse arquivo — ou se a conexão falhar — conecte ao AP `RemoteBoot-XXXX` e abra `http://192.168.4.1`; a senha/token temporário aparece no serial.
-5. Na dashboard, SSID e senha já estarão preservados pela configuração local. Configure MAC Ethernet e dois tokens **diferentes**, com 24–128 caracteres ASCII de `A–Z`, `a–z`, `0–9`, `_`, `-`. Gere-os com `python -c "import secrets; print(secrets.token_hex(24))"`. Guarde-os.
-6. Salve e abra o IP da ESP32 com o token administrativo. Reserve o IP no DHCP. O endereço é embutido no build iPXE e não deve mudar.
+4. No primeiro acesso, a dashboard abre automaticamente o setup guiado:
+   - crie uma senha administrativa de 1–8 caracteres;
+   - aguarde o reinício;
+   - cadastre nome e MAC do computador;
+   - informe uma senha de agent de até 8 caracteres ou deixe vazia para usar somente Wake-on-LAN;
+   - configure boot quando houver agent;
+   - configure ou pule Sinric Pro e Tailscale.
+5. Finalize o setup e entre com a senha criada. Reserve o IP da ESP32 no DHCP.
 6. Configure UEFI/WoL seguindo `docs/bios.md`, `docs/linux-wol.md` e `docs/windows-wol.md`.
-7. Execute o installer do host e sincronize as entradas UEFI na dashboard. Mapeie dois Switches Sinric Pro: um para cada entrada. O fluxo guiado está em `docs/sinric.md`.
-8. Configure padrão/fallback na dashboard e teste cada Switch antes de promover a entrada Remote Boot no firmware.
+
+Computadores adicionais usam uma senha de agent exclusiva. O agent é opcional para Wake-on-LAN.
 
 ## Sinric Pro: passo a passo principal
 
@@ -148,12 +152,10 @@ Em Linux que usa ptrace e impede LeakSanitizer: `ASAN_OPTIONS=detect_leaks=0 bas
 
 ### POC MicroLink + Tailscale
 
-A variante `esp32c3_4mb_microlink` permite acessar a dashboard pelo IP Tailscale do próprio ESP32-C3, sem hardware auxiliar. Ela é opt-in, usa uma credencial local ignorada pelo Git e não altera o ambiente estável `esp32c3_4mb`.
+A variante `esp32c3_4mb_microlink` permite acessar a dashboard pelo IP Tailscale do próprio ESP32-C3, sem hardware auxiliar. Ela é opt-in; a Auth Key e o nome do dispositivo são informados no setup da dashboard e persistidos na NVS.
 
 ```bash
 pipx install --force platformio==6.1.19
-cp config.microlink.example.json config.local.microlink.json
-# Preencha a auth key local antes do build.
 pio run -e esp32c3_4mb_microlink -t upload
 pio device monitor -b 115200
 ```

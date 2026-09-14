@@ -9,25 +9,11 @@ Esta branch contém uma variante experimental que coloca o próprio ESP32-C3 na 
 - Crie uma auth key em **Tailscale Admin Console → Settings → Keys**. Para o primeiro teste, use chave de uso único e não marque o dispositivo como ephemeral. Tags são opcionais e devem respeitar a política da sua tailnet.
 - Este é um POC para placa sem PSRAM. Comece com uma tailnet pequena e observe a memória no card/API.
 
-## Configuração local da chave
+## Configuração pela dashboard
 
-Na raiz do repositório:
+Grave primeiro a variante MicroLink sem incluir qualquer chave no código. No primeiro acesso, o wizard oferece a etapa Tailscale. Cole a Auth Key e escolha o nome do dispositivo; os valores são persistidos na NVS e aplicados após o reinício final.
 
-```bash
-cp config.microlink.example.json config.local.microlink.json
-chmod 600 config.local.microlink.json
-```
-
-Edite somente o arquivo local:
-
-```json
-{
-  "auth_key": "tskey-auth-SUA_CHAVE_REAL",
-  "device_name": "remote-boot-esp32"
-}
-```
-
-`config.local.microlink.json` é ignorado pelo Git. O script de build valida a chave e gera um header também ignorado. Ele não imprime a credencial. Não coloque a chave no `platformio.ini`, em commits, screenshots ou logs.
+Em uma instalação já configurada, altere a integração pela dashboard autenticada. A API nunca devolve a Auth Key, apenas informa se ela está configurada.
 
 ## Build, gravação e monitor no CachyOS
 
@@ -47,15 +33,15 @@ Depois que o monitor indicar conexão, abra primeiro a dashboard pelo IP LAN e c
 http://100.x.y.z/
 ```
 
-A dashboard continua exigindo o token administrativo. O IP Tailscale não é um endereço público da Internet: ele só funciona a partir de dispositivos autorizados na tailnet. MagicDNS não é obrigatório neste POC; prefira inicialmente o IP exibido.
+A dashboard continua exigindo a senha administrativa. O IP Tailscale não é um endereço público da Internet: ele só funciona a partir de dispositivos autorizados na tailnet. MagicDNS não é obrigatório neste POC; prefira inicialmente o IP exibido.
 
 ## Estados e diagnóstico
 
 | Estado no card | Significado | Ação |
 |---|---|---|
 | `DESATIVADO` | Foi gravado o ambiente padrão | Grave `esp32c3_4mb_microlink` |
-| `NÃO CONFIGURADO` | Build experimental sem arquivo/chave | Crie `config.local.microlink.json` e recompile |
-| `AGUARDANDO WI-FI` | A LAN ainda não conectou | Corrija o Wi-Fi pela configuração local/AP |
+| `NÃO CONFIGURADO` | Build experimental sem arquivo/chave | Configure a Auth Key pela dashboard |
+| `AGUARDANDO WI-FI` | A LAN ainda não conectou | Corrija o Wi-Fi na configuração local |
 | `REGISTRANDO` | Autenticação/registro em andamento | Aguarde e confira a máquina no console Tailscale |
 | `CONECTADO` | Interface Tailscale pronta | Abra o IP `100.x.y.z` com o token admin |
 | `ERRO` | MicroLink falhou ao iniciar | Use a dashboard LAN; reinicie e confira os logs |
@@ -66,7 +52,7 @@ A dashboard continua exigindo o token administrativo. O IP Tailscale não é um 
 
 - O ESP32-C3 é single-core e esta placa não tem PSRAM. O port limita peers e buffers, mas estabilidade precisa ser confirmada no hardware real.
 - Não há OTA nem rollback automático. Tenha o cabo USB disponível.
-- A auth key é compilada no binário e pode ser extraída da flash se Secure Boot e Flash Encryption não estiverem habilitados. Revogue a chave no Tailscale após o registro se ela não for de uso único ou se o firmware/binário vazar.
+- A Auth Key fica na NVS e pode ser extraída da flash se Secure Boot e Flash Encryption não estiverem habilitados. Use uma chave de uso único ou revogue-a depois do registro.
 - A integração não cria Funnel, exit node ou subnet router e não publica a dashboard na Internet aberta.
 - Falha do MicroLink é `fail-open` apenas para a LAN: dashboard, Sinric, agent e boot local continuam independentes.
 

@@ -1,3 +1,20 @@
+# Setup guiado da dashboard
+
+O primeiro acesso exige Wi-Fi configurado em `config.local.json`; o SoftAP e o captive portal foram removidos. Abra o IP mostrado no serial.
+
+O wizard solicita, em ordem:
+
+1. senha administrativa de 1–8 caracteres e reinício;
+2. nome e MAC do primeiro computador;
+3. senha opcional do agent, também com até 8 caracteres;
+4. configuração de boot somente quando houver agent;
+5. Sinric Pro e Tailscale opcionais;
+6. conclusão e reinício final.
+
+A rota pública só informa a etapa atual. Apenas a criação da primeira senha é pública e deixa de existir logicamente após ser concluída. As demais etapas exigem a senha administrativa. Cinco falhas consecutivas bloqueiam novas tentativas por 30 segundos.
+
+A variante MicroLink recebe a Auth Key do Tailscale pelo wizard/dashboard. A chave fica na NVS, nunca é devolvida pela API e uma alteração exige reinício.
+
 # Instalação, atualização e recuperação
 
 Para o cliente residente, siga primeiro [Agent nativo C#](native-agent.md). Os installers atuais exigem o binário NativeAOT e iniciam C# via WebSocket. PowerShell/Bash abaixo são ferramentas de instalação e recuperação, não o processo residente. HTTP heartbeat permanece só para clientes legados.
@@ -18,4 +35,4 @@ Atualização ESP32: upload PlatformIO padrão não faz erase-flash. Não use er
 
 Para testar acesso remoto pelo próprio ESP32-C3, siga [MicroLink + Tailscale](microlink-tailscale.md). A variante experimental tem um environment separado; voltar a `esp32c3_4mb` não apaga a NVS.
 
-Tokens precisam ser atualizados nos agents se forem trocados na dashboard. Alterações Sinric/rede reiniciam ESP32; salve trabalho na UI primeiro.
+Senhas do agent precisam ser atualizadas no respectivo PC se forem trocadas na dashboard. Alterações Sinric, rede ou Tailscale reiniciam a ESP32; salve trabalho primeiro.
