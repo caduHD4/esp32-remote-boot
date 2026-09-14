@@ -206,3 +206,19 @@ Migrar o firmware para schema 3 com até quatro computadores isolados, agent opc
 - Validar iPXE antigo e template novo.
 - Validar Sinric direcionando os dois PCs.
 - Validar dashboard pela LAN e pelo IP Tailscale.
+
+
+## Alteração aprovada — setup guiado e credenciais curtas
+
+Esta alteração passa a integrar as Tasks 1, 3, 7 e 8 e adiciona os seguintes critérios obrigatórios:
+
+- Adicionar política nativa testável de etapas do setup e de novas senhas com 1–8 bytes.
+- Permitir `computers: []` somente enquanto o setup não estiver concluído.
+- Criar rotas de estado/criação inicial que não revelem secrets e sejam desativadas após a primeira senha.
+- Reiniciar após criar a senha e retomar a etapa persistida.
+- Tornar agent opcional no cadastro; só mostrar etapa de boot quando uma senha de agent estiver configurada.
+- Oferecer pular/configurar Sinric e Tailscale antes da conclusão.
+- Mover `tailscale_auth_key` e `tailscale_device_name` para a configuração global em NVS.
+- Preservar tokens longos migrados do schema 2 para manter compatibilidade com o agent atual.
+- Regenerar `web_asset.h` e adicionar testes do wizard, transições, autenticação e redação.
+- Atualizar documentação removendo a exigência de auth key em arquivo para uso normal.

@@ -201,3 +201,32 @@ Em primeiro uso sem credenciais válidas, a ESP32 permanece offline e imprime di
 
 - [iPXE MAC setting e passagem em URL](https://ipxe.org/cfg/mac)
 - [iPXE chain](https://ipxe.org/cmd/chain)
+
+
+## Fluxo guiado de primeiro acesso
+
+O firmware mantém `setup_step` global e só expõe rotas públicas de onboarding enquanto `setup_complete=false`. O fluxo não depende de SoftAP: o primeiro acesso ocorre pela LAN usando as credenciais Wi-Fi locais embutidas no build.
+
+1. `password`: a dashboard solicita uma nova senha administrativa.
+2. `computer`: após salvar e reiniciar, informa que nenhum computador está configurado e solicita nome e MAC; o agent é opcional.
+3. `boot`: exibido apenas quando o computador possui senha de agent; aguarda catálogo e permite definir target padrão, fallback, TTL e comportamento físico.
+4. `integrations`: oferece Sinric Pro e, na variante MicroLink, Tailscale.
+5. `complete`: persiste a conclusão, reinicia e abre a dashboard normal.
+
+O endpoint público de estado retorna somente etapa/capacidades, nunca secrets. Escritas públicas são aceitas exclusivamente na etapa exata esperada; depois da criação da senha, todas as demais etapas exigem autenticação administrativa. A conclusão desativa definitivamente as rotas públicas de criação da senha, salvo restauração de fábrica.
+
+### Credenciais curtas
+
+- Novas senhas administrativas: 1 a 8 bytes, sem regra de composição.
+- Nova senha de agent: vazia para desabilitar o agent ou 1 a 8 bytes.
+- Configurações schema 2 migradas preservam os tokens existentes, mesmo se maiores, para não desconectar o agent instalado.
+- Comparação permanece resistente a diferença de tempo e nenhuma senha aparece em config sanitizada, status ou logs.
+- Não haverá tentativa de transformar MAC em credencial.
+
+Esse limite reduz a resistência contra força bruta. A dashboard não deve ser publicada na Internet aberta; o acesso esperado continua sendo LAN ou tailnet.
+
+### Tailscale configurável pela dashboard
+
+Na variante MicroLink, `tailscale_auth_key` e `tailscale_device_name` passam a ser campos globais persistidos na NVS. A auth key é aceita apenas durante setup ou edição autenticada, nunca retornada pela API; a resposta expõe somente `tailscale_auth_key_set`.
+
+O runtime MicroLink recebe a configuração persistida após o boot. Alterar ou remover a chave agenda reinício, pois a biblioteca não troca identidade Tailscale com uma sessão ativa. O arquivo `config.local.microlink.json` deixa de ser obrigatório e permanece apenas como compatibilidade de build durante a transição.
