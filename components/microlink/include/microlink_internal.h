@@ -324,6 +324,7 @@ typedef struct {
     mbedtls_ssl_config ssl_conf;
     mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_context ctr_drbg;
+    bool tls_initialized;
     bool connected;
     uint64_t last_recv_ms;          /* For keepalive watchdog */
 } ml_derp_conn_t;

@@ -15,6 +15,7 @@ jobs:
       - run: bash tests/run.sh
       - run: find agent installer ipxe scripts tests -name '*.sh' -print0 | xargs -0 shellcheck -x
       - run: pio run -e esp32c3_4mb
+      - run: pio run -e esp32c3_4mb_microlink
       - run: bash tests/config.sh
       - run: make -C uefi/remote-boot
       - run: file uefi/remote-boot/RemoteBoot.efi | grep 'PE32+.*EFI application.*x86-64'

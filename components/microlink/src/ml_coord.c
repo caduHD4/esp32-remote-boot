@@ -22,6 +22,7 @@
  */
 
 #include "microlink_internal.h"
+#include "ml_io_policy.h"
 #include "ml_json_scan.h"
 #include "x25519.h"
 #include "esp_log.h"
@@ -93,14 +94,32 @@ static int coord_send(microlink_t *ml, const uint8_t *data, size_t len) {
     ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
 
     size_t sent = 0;
+    unsigned int retries = 0;
+    uint64_t retry_window_start_ms = ml_get_time_ms();
     while (sent < len) {
         int n = ml_send(ml->coord_sock, data + sent, len - sent, 0);
-        if (n <= 0) {
+        if (n < 0) {
+            int send_errno = errno;
+            uint64_t elapsed_ms = ml_get_time_ms() - retry_window_start_ms;
+            if (ml_io_send_should_retry(send_errno, retries, elapsed_ms)) {
+                retries++;
+                ESP_LOGD(TAG, "coord_send backpressure: sent=%d/%d retry=%u errno=%d",
+                         (int)sent, (int)len, retries, send_errno);
+                vTaskDelay(pdMS_TO_TICKS(ML_IO_SEND_RETRY_DELAY_MS));
+                continue;
+            }
             ESP_LOGE(TAG, "coord_send failed: sent=%d/%d n=%d errno=%d",
-                     (int)sent, (int)len, n, errno);
+                     (int)sent, (int)len, n, send_errno);
+            return -1;
+        }
+        if (n == 0) {
+            ESP_LOGE(TAG, "coord_send connection closed: sent=%d/%d",
+                     (int)sent, (int)len);
             return -1;
         }
         sent += n;
+        retries = 0;
+        retry_window_start_ms = ml_get_time_ms();
     }
     return 0;
 }

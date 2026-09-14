@@ -16,6 +16,8 @@ g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_microlink_policy.cpp" -o 
 "$temp/test_microlink_policy"
 g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_microlink_runtime.cpp" -o "$temp/test_microlink_runtime"
 "$temp/test_microlink_runtime"
+g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_microlink_io_policy.cpp" -o "$temp/test_microlink_io_policy"
+"$temp/test_microlink_io_policy"
 gcc -std=c11 -Wall -Wextra -Werror -I"$root/components/microlink/src" -c "$root/components/microlink/src/ml_json_scan.c" -o "$temp/ml_json_scan.o"
 g++ -std=c++17 -Wall -Wextra -Werror -I"$root/components/microlink/src" "$root/tests/test_microlink_json_scan.cpp" "$temp/ml_json_scan.o" -o "$temp/test_microlink_json_scan"
 "$temp/test_microlink_json_scan"
