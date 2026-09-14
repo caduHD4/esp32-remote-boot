@@ -119,7 +119,7 @@ bool validate(JsonDocument& d) {
     bool complete=d["setup_complete"]|false;
     if(step==rb::SetupStep::Invalid||(complete!=(step==rb::SetupStep::Complete))) return false;
     if(step!=rb::SetupStep::Password&&!validStoredCredential(d["admin_token"]|"")) return false;
-    if(!d["dhcp"].as<bool()) { IPAddress address; for(const char* key:{"ip","subnet","gateway","dns"}) if(!address.fromString(d[key]|"")) return false; }
+    if(!d["dhcp"].as<bool>()) { IPAddress address; for(const char* key:{"ip","subnet","gateway","dns"}) if(!address.fromString(d[key]|"")) return false; }
 
     JsonArray computers=d["computers"].as<JsonArray>();
     const bool allowEmpty=!complete&&(step==rb::SetupStep::Password||step==rb::SetupStep::Computer);
