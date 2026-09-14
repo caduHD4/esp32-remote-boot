@@ -21,3 +21,7 @@ assert.deepEqual(format({built:true,configured:true,state:'error'}),{
 });
 
 console.log('PASS: Tailscale dashboard status formatting');
+assert.deepEqual(format({built:true,configured:true,connected:false,control_online:true,state:'peer_wait',derp_online:true}),{
+  label:'CONTROLE ONLINE',detail:'Relay online • Sem tráfego autenticado recente',tone:'warning'
+});
+assert.equal(format({built:true,configured:true,connected:true,state:'wifi_offline'}).label,'AGUARDANDO WI-FI');

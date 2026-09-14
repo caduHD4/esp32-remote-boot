@@ -105,6 +105,8 @@ struct wireguardif_peer {
  */
 
 // Initialise a new WireGuard network interface (netif)
+/* Atomic aggregate packet evidence; never exposes peer keys or mutable sessions. */
+void wireguardif_diagnostics(uint32_t *encrypted, uint32_t *authenticated, uint32_t *last_ms);
 err_t wireguardif_init(struct netif *netif);
 
 // Helper to initialise the peer struct with defaults

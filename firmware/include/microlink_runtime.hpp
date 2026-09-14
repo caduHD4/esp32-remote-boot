@@ -15,6 +15,9 @@ struct MicrolinkSnapshot {
     bool built = false;
     bool configured = false;
     bool connected = false;
+    bool controlOnline = false, derpOnline = false, serverInfo = false;
+    uint32_t mapUpdates = 0, reconnects = 0, tlsDeferred = 0;
+    uint32_t encryptedRx = 0, authenticatedRx = 0, authenticatedAgeMs = 0;
     const char* state = "disabled";
     char ip[16]{};
     int peers = 0;
@@ -28,10 +31,15 @@ public:
     void begin(bool configLocked, bool setupMode, bool wifiConnected);
     void tick(bool wifiConnected);
     MicrolinkSnapshot snapshot() const;
+    bool beginSinricHandle(bool connected);
+    void endSinricHandle(bool connected, void (*abortPending)());
 
 private:
     void tryStart(bool wifiConnected);
 
+    bool wifiConnected_ = false, sinricLease_ = false;
+    uint32_t lastSinricAttempt_ = 0;
+    uint32_t sinricServiceStarted_ = 0;
     bool configLocked_ = false;
     bool setupMode_ = false;
     MicrolinkLifecycle lifecycle_;

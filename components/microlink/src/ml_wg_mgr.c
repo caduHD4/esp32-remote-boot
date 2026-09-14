@@ -845,50 +845,12 @@ static void process_disco_ping(microlink_t *ml, const ml_rx_packet_t *pkt,
 
     if (pong_len == 0) return;
 
-    /* Send PONG via ALL paths for maximum reachability (matching v1 + tailscaled):
-     * 1. Direct reply to PING source address (opens NAT hole)
-     * 2. All known LAN endpoints (fastest path for same-network)
-     * 3. DERP relay (guaranteed delivery) */
-
-    bool direct_sent = false;
-
-    /* 1. Direct reply to PING source (if it was direct UDP) */
-    if (!pkt->via_derp && pkt->src_ip != 0 && pkt->src_port != 0) {
+    /* Reply only on ingress. Explicit probes discover alternate paths. */
+    if (ml_reply_via_derp(pkt->via_derp)) {
+        ml_derp_queue_send(ml, p->public_key, pong, pong_len);
+    } else if (pkt->src_ip != 0 && pkt->src_port != 0) {
         disco_udp_sendto(ml, pong, pong_len, pkt->src_ip, pkt->src_port);
-        direct_sent = true;
     }
-
-    /* 2. Send to ALL known LAN endpoints (same-network = fastest path) */
-    if (disco_has_udp_path(ml)) {
-        for (int i = 0; i < p->endpoint_count; i++) {
-            if (p->endpoints[i].is_ipv6 || p->endpoints[i].ip == 0) continue;
-            if (!is_lan_ip(p->endpoints[i].ip)) continue;
-            /* Skip if this is the same as the ping source (already sent) */
-            if (p->endpoints[i].ip == pkt->src_ip &&
-                p->endpoints[i].port == pkt->src_port) continue;
-
-            disco_udp_sendto(ml, pong, pong_len, p->endpoints[i].ip, p->endpoints[i].port);
-            direct_sent = true;
-        }
-
-        /* 2b. Also try public endpoints if no LAN worked */
-        if (!direct_sent) {
-            for (int i = 0; i < p->endpoint_count; i++) {
-                if (p->endpoints[i].is_ipv6 || p->endpoints[i].ip == 0) continue;
-                if (is_lan_ip(p->endpoints[i].ip)) continue;
-
-                disco_udp_sendto(ml, pong, pong_len, p->endpoints[i].ip, p->endpoints[i].port);
-                direct_sent = true;
-                break;  /* Only try one public endpoint */
-            }
-        }
-    }
-
-    /* 3. ALWAYS send via DERP (guaranteed delivery, even if direct worked) */
-    ml_derp_queue_send(ml, p->public_key, pong, pong_len);
-
-    ESP_LOGD(TAG, "PONG sent to %s (direct=%s, DERP=yes)",
-             p->hostname, direct_sent ? "yes" : "no");
 }
 
 static void process_disco_pong(microlink_t *ml, const ml_rx_packet_t *pkt,
@@ -1575,13 +1537,22 @@ void ml_wg_mgr_task(void *arg) {
             ESP_LOGI(TAG, "STUN complete — sent CallMeMaybe to %d peers", cmm_count);
         }
 
-        /* Process DISCO packets */
+        /* Process WireGuard packets */
+        ml_rx_packet_t wg_pkt;
+        while (xQueueReceive(ml->wg_rx_queue, &wg_pkt, 0) == pdTRUE) {
+            process_wg_packet(ml, &wg_pkt);
+        }
+
+        __atomic_store_n(&ml->diagnostics.peers, ml->peer_count, __ATOMIC_RELAXED);
+        unsigned disco_processed = 0;
+        /* Process a bounded DISCO batch after WireGuard. */
 #ifdef CONFIG_ML_ZERO_COPY_WG
         /* Zero-copy mode: drain SPSC ring buffer (PCB callback → wg_mgr) */
         {
             uint8_t tail = __atomic_load_n(&ml->zc.rx_tail, __ATOMIC_RELAXED);
             uint8_t head = __atomic_load_n(&ml->zc.rx_head, __ATOMIC_ACQUIRE);
-            while (tail != head) {
+            while (tail != head && ml_disco_budget(disco_processed)) {
+                disco_processed++;
                 ml_zc_disco_entry_t *entry = &ml->zc.rx_ring[tail];
                 ml_rx_packet_t disco_pkt = {
                     .data = entry->data,
@@ -1600,15 +1571,10 @@ void ml_wg_mgr_task(void *arg) {
 #endif
         /* Queue-based path: DISCO from DERP relay + fallback when zero-copy disabled */
         ml_rx_packet_t disco_pkt;
-        while (xQueueReceive(ml->disco_rx_queue, &disco_pkt, 0) == pdTRUE) {
+        while (ml_disco_budget(disco_processed) && xQueueReceive(ml->disco_rx_queue, &disco_pkt, 0) == pdTRUE) {
+            disco_processed++;
             process_disco_packet(ml, &disco_pkt);
             free(disco_pkt.data);
-        }
-
-        /* Process WireGuard packets */
-        ml_rx_packet_t wg_pkt;
-        while (xQueueReceive(ml->wg_rx_queue, &wg_pkt, 0) == pdTRUE) {
-            process_wg_packet(ml, &wg_pkt);
         }
 
         /* Run WireGuard periodic processing (handshakes, keepalives, rekeys).

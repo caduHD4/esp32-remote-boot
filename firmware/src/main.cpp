@@ -18,7 +18,7 @@
 #include "local_wifi.h"
 #include "web_asset.h"
 
-constexpr char Version[]="2.2.0-microlink-poc";
+constexpr char Version[]="2.2.1-cloud-stability";
 WebServer server(80); DNSServer dns; WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
 bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
@@ -168,6 +168,9 @@ void appendStatus(JsonObject d) {
     const rb::MicrolinkSnapshot tail=microlink.snapshot(); JsonObject tailscale=d["tailscale"].to<JsonObject>();
     tailscale["built"]=tail.built; tailscale["configured"]=tail.configured; tailscale["connected"]=tail.connected;
     tailscale["state"]=tail.state; tailscale["ip"]=tail.ip; tailscale["peers"]=tail.peers;
+    tailscale["control_online"]=tail.controlOnline; tailscale["derp_online"]=tail.derpOnline; tailscale["derp_server_info"]=tail.serverInfo;
+    tailscale["map_updates"]=tail.mapUpdates; tailscale["reconnects"]=tail.reconnects; tailscale["tls_deferred"]=tail.tlsDeferred;
+    tailscale["wg_encrypted_rx"]=tail.encryptedRx; tailscale["wg_authenticated_rx"]=tail.authenticatedRx; tailscale["authenticated_age_ms"]=tail.authenticatedAgeMs;
     tailscale["heap_free"]=tail.heapFree; tailscale["heap_minimum"]=tail.heapMinimum; tailscale["largest_block"]=tail.largestBlock;
 }
 void routes() {
@@ -379,7 +382,7 @@ void setup() {
     routes(); startAgentSocket(); startSinric(); microlink.begin(locked,setupMode,WiFi.status()==WL_CONNECTED); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
 }
 void loop() {
-    if(sinricStarted) { SinricPro.handle(); for(int i=0;i<8;++i) if(rb::sinricResetDue(slotReset[i],millis())) { SinricProSwitch& d=SinricPro[slotIds[i]]; slotReset[i]=rb::nextSinricReset(millis(),d.sendPowerStateEvent(false)); } }
+    if(sinricStarted && microlink.beginSinricHandle(sinricOnline)) { SinricPro.handle(); microlink.endSinricHandle(sinricOnline,[]{ SinricPro.stop(); SinricPro.begin(config["sinric_app_key"].as<const char*>(),config["sinric_app_secret"].as<const char*>()); }); for(int i=0;i<8;++i) if(rb::sinricResetDue(slotReset[i],millis())) { SinricProSwitch& d=SinricPro[slotIds[i]]; slotReset[i]=rb::nextSinricReset(millis(),d.sendPowerStateEvent(false)); } }
     server.handleClient(); agentSocketTick(); if(setupNetwork.shouldProcessDns()) dns.processNextRequest(); wolTick(); microlink.tick(WiFi.status()==WL_CONNECTED);
     if(setupNetwork.shouldStartRecoveryAp(WiFi.status()==WL_CONNECTED,millis())) setupAP();
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);

@@ -29,6 +29,7 @@
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/error.h"
 #include "nacl_box.h"
+#include "cJSON.h"
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -40,6 +41,10 @@ static const char *TAG = "ml_derp";
 
 static void derp_release_transport(microlink_t *ml, bool graceful) {
     ml->derp.connected = false;
+    __atomic_store_n(&ml->diagnostics.derp_online, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&ml->diagnostics.derp_server_info, 0, __ATOMIC_RELAXED);
+    ml_frame_reset(&ml->derp.rx);
+    ml->derp.rx_started_ms = 0;
     if (ml->events) {
         xEventGroupClearBits(ml->events, ML_EVT_DERP_CONNECTED);
     }
@@ -374,84 +379,52 @@ static void dispatch_derp_frame(microlink_t *ml, uint8_t frame_type,
 static int poll_derp_read(microlink_t *ml) {
     if (!ml->derp.connected || ml->derp.sockfd < 0) return -1;
 
-    /* Read 5-byte frame header.
-     * SO_RCVTIMEO=100ms ensures read() returns within 100ms if no data. */
-    uint8_t header[5];
-    int n = mbedtls_ssl_read(&ml->derp.ssl, header, 5);
+    ml_frame_reader *rx = &ml->derp.rx;
+    uint32_t now = (uint32_t)ml_get_time_ms();
+    if (rx->header_used && (uint32_t)(now - ml->derp.rx_started_ms) > 10000) return -1;
+    // Read only the remaining header/payload: TLS may return any fragment.
+    size_t want = rx->header_used < 5 ? 5-rx->header_used : rx->length-rx->used;
+    uint8_t chunk[1024];
+    if (want > sizeof(chunk)) want = sizeof(chunk);
+    int n = mbedtls_ssl_read(&ml->derp.ssl, chunk, want);
     if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE ||
-        n == MBEDTLS_ERR_SSL_TIMEOUT) {
-        return 0;  /* No data available / timeout */
-    }
-    if (n <= 0) {
-        ESP_LOGW(TAG, "DERP header read returned %d (0x%04x)", n, n < 0 ? -n : 0);
-        return n;
-    }
-    if (n < 5) {
-        ESP_LOGW(TAG, "DERP partial header: got %d of 5 bytes", n);
-        return -1;
-    }
-
-    uint8_t frame_type = header[0];
-    uint32_t len = (header[1] << 24) | (header[2] << 16) | (header[3] << 8) | header[4];
-
+        n == MBEDTLS_ERR_SSL_TIMEOUT) return 0;
+    if (n <= 0) return -1;
+    if (!rx->header_used) ml->derp.rx_started_ms = now;
+    size_t consumed;
+    int ready = ml_frame_feed(rx, ML_FRAME_DERP, chunk, n, &consumed, ML_DERP_MAX_FRAME);
+    if (ready <= 0) return ready;
+    uint8_t frame_type = rx->header[0];
+    uint8_t *payload = rx->payload;
+    size_t payload_len = rx->length;
     uint8_t src_key[32] = {0};
-    uint8_t *payload = NULL;
-    size_t payload_len = 0;
-
-    if (len == 0) {
-        dispatch_derp_frame(ml, frame_type, src_key, NULL, 0);
+    if (frame_type == DERP_FRAME_SERVER_INFO) {
+        // Official client consumes ServerInfo in Recv, authenticates its NaCl
+        // box with the server key, and rejects invalid JSON. Never ignore it.
+        if (payload_len < NACL_BOX_NONCEBYTES + NACL_BOX_MACBYTES) return -1;
+        size_t plain_len = payload_len - NACL_BOX_NONCEBYTES - NACL_BOX_MACBYTES;
+        uint8_t *plain = malloc(plain_len + 1);
+        if (!plain) return -1;
+        int valid = nacl_box_open(plain, payload + NACL_BOX_NONCEBYTES,
+            payload_len - NACL_BOX_NONCEBYTES, payload, ml->derp.server_key, ml->wg_private_key);
+        plain[plain_len] = 0;
+        cJSON *info = valid == 0 ? cJSON_ParseWithLengthOpts((char *)plain, plain_len + 1, NULL, true) : NULL;
+        bool accepted = cJSON_IsObject(info);
+        cJSON_Delete(info);
+        free(plain);
+        ml_frame_reset(rx);
+        if (!accepted) return -1;
+        __atomic_store_n(&ml->diagnostics.derp_server_info, 1, __ATOMIC_RELAXED);
         return 1;
     }
-
-    if (len > 65536) {
-        ESP_LOGW(TAG, "DERP frame too large: %lu", (unsigned long)len);
-        return -1;
+    if (frame_type == DERP_FRAME_RECV_PACKET) {
+        if (payload_len <= 32) return -1;
+        memcpy(src_key, payload, 32);
+        memmove(payload, payload + 32, payload_len - 32);
+        payload_len -= 32;
     }
-
-    /* Read frame payload - we already got the header so payload should follow.
-     * Use longer timeout (2s) since we KNOW data is coming. */
-    uint8_t *buf = ml_psram_malloc(len);
-    if (!buf) return -1;
-
-    size_t total_read = 0;
-    uint64_t payload_start = ml_get_time_ms();
-    while (total_read < len) {
-        /* Safety timeout: 5 seconds for payload */
-        if (ml_get_time_ms() - payload_start > 5000) {
-            ESP_LOGW(TAG, "DERP payload timeout at %d/%lu bytes",
-                     (int)total_read, (unsigned long)len);
-            free(buf);
-            return -1;
-        }
-        n = mbedtls_ssl_read(&ml->derp.ssl, buf + total_read, len - total_read);
-        if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE ||
-            n == MBEDTLS_ERR_SSL_TIMEOUT) {
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        }
-        if (n <= 0) {
-            ESP_LOGW(TAG, "DERP payload read error: %d (0x%04x) at %d/%lu bytes",
-                     n, n < 0 ? -n : 0, (int)total_read, (unsigned long)len);
-            free(buf);
-            return n;
-        }
-        total_read += n;
-    }
-
-    /* For RecvPacket (0x05): first 32 bytes are sender's public key */
-    if (frame_type == DERP_FRAME_RECV_PACKET && len > 32) {
-        memcpy(src_key, buf, 32);
-        payload = malloc(len - 32);
-        if (payload) {
-            memcpy(payload, buf + 32, len - 32);
-            payload_len = len - 32;
-        }
-        free(buf);
-    } else {
-        payload = buf;
-        payload_len = len;
-    }
-
+    rx->payload = NULL; // Dispatch takes ownership.
+    ml_frame_reset(rx);
     dispatch_derp_frame(ml, frame_type, src_key, payload, payload_len);
     return 1;
 }
@@ -543,46 +516,41 @@ void ml_derp_tx_task(void *arg) {
             }
         }
 
-        /* ---- Handle DERP connect request from coord task ---- */
+        /* Retain a requested connection through admission deferral and failures. */
         {
+            static uint32_t previous_attempt_ms = 0, retry_at_ms = 0;
+            static unsigned attempts = 0;
             EventBits_t bits = xEventGroupGetBits(ml->events);
-            if ((bits & ML_EVT_DERP_CONNECT_REQ) && !ml->derp.connected) {
-                xEventGroupClearBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
-                /* Retry up to 3 times with 2s backoff */
-                for (int attempt = 0; attempt < 3 && !ml->derp.connected; attempt++) {
-                    if (attempt > 0) {
-                        ESP_LOGW(TAG, "DERP connect retry %d/3 in 2s...", attempt + 1);
-                        vTaskDelay(pdMS_TO_TICKS(2000));
-                    } else {
-                        ESP_LOGI(TAG, "DERP connect requested, connecting from I/O task");
-                    }
-                    if (ml_derp_connect(ml) == ESP_OK) {
-                        connected_since_ms = ml_get_time_ms();
-                        verbose_phase = true;
-                        break;
-                    }
-                    ESP_LOGW(TAG, "DERP connect attempt %d failed", attempt + 1);
-                }
-            }
             if (bits & ML_EVT_DERP_RECONNECT) {
                 xEventGroupClearBits(ml->events, ML_EVT_DERP_RECONNECT);
-                ESP_LOGW(TAG, "DERP reconnect requested (was %s)",
-                         ml->derp.connected ? "connected" : "disconnected");
                 ml_derp_disconnect(ml);
-                verbose_phase = false;
-                /* Auto-reconnect after disconnect */
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                for (int attempt = 0; attempt < 3 && !ml->derp.connected; attempt++) {
-                    if (attempt > 0) {
-                        ESP_LOGW(TAG, "DERP reconnect retry %d/3 in 2s...", attempt + 1);
-                        vTaskDelay(pdMS_TO_TICKS(2000));
-                    }
-                    if (ml_derp_connect(ml) == ESP_OK) {
+                xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
+                __atomic_add_fetch(&ml->diagnostics.reconnects, 1, __ATOMIC_RELAXED);
+                retry_at_ms = (uint32_t)ml_get_time_ms() + 2000;
+            }
+            uint32_t now = (uint32_t)ml_get_time_ms();
+            bits = xEventGroupGetBits(ml->events);
+            if ((bits & ML_EVT_DERP_CONNECT_REQ) && !ml->derp.connected &&
+                (int32_t)(now-retry_at_ms) >= 0) {
+                bool admitted = ml_tls_admit(now, previous_attempt_ms,
+                    heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+                    heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+                if (admitted && microlink_tls_try_acquire()) {
+                    previous_attempt_ms = now;
+                    esp_err_t result = ml_derp_connect(ml);
+                    microlink_tls_release();
+                    if (result == ESP_OK) {
+                        xEventGroupClearBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
+                        attempts = 0;
                         connected_since_ms = ml_get_time_ms();
                         verbose_phase = true;
-                        break;
+                    } else {
+                        retry_at_ms = (uint32_t)ml_get_time_ms() + ml_retry_delay(attempts);
+                        if (attempts < 4) attempts++;
                     }
-                    ESP_LOGW(TAG, "DERP reconnect attempt %d failed", attempt + 1);
+                } else {
+                    __atomic_add_fetch(&ml->diagnostics.tls_deferred, 1, __ATOMIC_RELAXED);
+                    retry_at_ms = now + 1000;
                 }
             }
         }
@@ -621,7 +589,7 @@ void ml_derp_tx_task(void *arg) {
                 }
                 if (ret < 0) {
                     ESP_LOGW(TAG, "DERP write failed");
-                    ml->derp.connected = false;
+                    derp_release_transport(ml, false);
                     xEventGroupSetBits(ml->events, ML_EVT_DERP_RECONNECT);
                 } else {
                     frames_tx++;
@@ -644,7 +612,7 @@ void ml_derp_tx_task(void *arg) {
                     break;  /* No more data / timeout */
                 } else {
                     ESP_LOGW(TAG, "DERP read error: %d", ret);
-                    ml->derp.connected = false;
+                    derp_release_transport(ml, false);
                     xEventGroupSetBits(ml->events, ML_EVT_DERP_RECONNECT);
                     break;
                 }
@@ -887,7 +855,7 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
         goto connect_failed;
     }
 
-    if (frame_type != DERP_FRAME_SERVER_KEY || frame_len < 40) {
+    if (frame_type != DERP_FRAME_SERVER_KEY || frame_len < 40 || frame_len > ML_DERP_MAX_FRAME) {
         ESP_LOGE(TAG, "Expected ServerKey frame (0x01), got 0x%02x len=%lu",
                  frame_type, (unsigned long)frame_len);
         goto connect_failed;
@@ -926,7 +894,7 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
         size_t remaining = frame_len - 40;
         while (remaining > 0) {
             size_t chunk = remaining > sizeof(skip_buf) ? sizeof(skip_buf) : remaining;
-            if (derp_tls_read_all(ml, skip_buf, chunk, DERP_CONNECT_TIMEOUT_MS) < 0) break;
+            if (derp_tls_read_all(ml, skip_buf, chunk, DERP_CONNECT_TIMEOUT_MS) < 0) goto connect_failed;
             remaining -= chunk;
         }
     }
@@ -989,32 +957,8 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
         ESP_LOGI(TAG, "ClientInfo sent");
     }
 
-    /* Step 3: Read ServerInfo frame (type 0x03) */
-    {
-        uint8_t si_type = 0;
-        uint32_t si_len = 0;
-        err = derp_recv_frame_header(ml, &si_type, &si_len, DERP_CONNECT_TIMEOUT_MS);
-        if (err != ESP_OK || si_type != DERP_FRAME_SERVER_INFO || si_len == 0 ||
-            si_len > ML_DERP_MAX_FRAME) {
-            ESP_LOGW(TAG, "DERP ServerInfo missing or invalid (err=%d type=0x%02x len=%lu)",
-                     err, si_type, (unsigned long)si_len);
-            goto connect_failed;
-        }
-
-        uint8_t *si_buf = malloc(si_len);
-        if (!si_buf) {
-            ESP_LOGE(TAG, "DERP ServerInfo allocation failed: %lu bytes",
-                     (unsigned long)si_len);
-            goto connect_failed;
-        }
-        int si_read = derp_tls_read_all(ml, si_buf, si_len, DERP_CONNECT_TIMEOUT_MS);
-        free(si_buf);
-        if (si_read < 0) {
-            ESP_LOGW(TAG, "DERP ServerInfo payload incomplete");
-            goto connect_failed;
-        }
-        ESP_LOGI(TAG, "ServerInfo received (discarded)");
-    }
+    /* ServerInfo is authenticated asynchronously by poll_derp_read(). */
+    memcpy(ml->derp.server_key, derp_server_key, 32);
 
     /* Send NotePreferred (type 0x07): this is our preferred DERP */
     {
@@ -1034,6 +978,7 @@ esp_err_t ml_derp_connect(microlink_t *ml) {
     }
 
     ml->derp.connected = true;
+    __atomic_store_n(&ml->diagnostics.derp_online, 1, __ATOMIC_RELAXED);
     ml->derp.last_recv_ms = ml_get_time_ms();
     xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECTED);
 

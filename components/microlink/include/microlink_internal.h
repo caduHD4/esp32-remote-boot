@@ -16,6 +16,8 @@
 #pragma once
 
 #include "microlink.h"
+#include "ml_stream.h"
+#include "ml_transport_policy.h"
 #include "ml_config_httpd.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
@@ -319,6 +321,9 @@ typedef struct {
  * ========================================================================== */
 
 typedef struct {
+    ml_frame_reader rx;
+    uint32_t rx_started_ms;
+    uint8_t server_key[32];
     int sockfd;                     /* Raw TCP socket */
     mbedtls_ssl_context ssl;        /* TLS context (owned exclusively by DERP I/O task) */
     mbedtls_ssl_config ssl_conf;
@@ -334,6 +339,8 @@ typedef struct {
  * ========================================================================== */
 
 struct microlink_s {
+    microlink_diagnostics_t diagnostics; // Each scalar published/read atomically.
+
     /* Configuration (immutable after init) */
     microlink_config_t config;
 
@@ -378,6 +385,8 @@ struct microlink_s {
 
     /* Coordination socket (owned exclusively by coord task) */
     int coord_sock;
+    ml_frame_reader coord_rx, h2_rx, map_rx;
+    uint32_t coord_rx_started_ms;
     uint32_t h2_next_stream_id;         /* Next H2 stream ID for endpoint updates (odd, starts at 7) */
 
     /* WireGuard netif (owned exclusively by wg_mgr task) */

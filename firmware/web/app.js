@@ -24,6 +24,8 @@ function validateSinric(input){
 function formatTailscaleStatus(tailscale={}){
   if(!tailscale.built)return {label:'DESATIVADO',detail:'Firmware padrão',tone:'neutral'};
   if(!tailscale.configured)return {label:'NÃO CONFIGURADO',detail:'Adicione a chave no build',tone:'warning'};
+  if(tailscale.state==='wifi_offline')return {label:'AGUARDANDO WI-FI',detail:'Acesso local preservado',tone:'warning'};
+  if(tailscale.state==='peer_wait')return {label:'CONTROLE ONLINE',detail:(tailscale.derp_online?'Relay online':'Relay pendente')+' • Sem tráfego autenticado recente',tone:'warning'};
   if(tailscale.connected){
     const peerCount=Number(tailscale.peers)||0;
     return {label:'CONECTADO',detail:(tailscale.ip||'IP pendente')+' • '+peerCount+' peers',tone:'online'};

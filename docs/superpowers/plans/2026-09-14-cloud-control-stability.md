@@ -16,19 +16,19 @@ Files: firmware/src/main.cpp, firmware/include/sinric_policy.hpp,
 firmware/include/config_validation.hpp (if applicable), firmware/web/app.js,
 scripts/embed_web.py and regression tests.
 
-- [ ] Add failing behavioral regression tests for stale slot indices, normalized
+- [x] Add failing behavioral regression tests for stale slot indices, normalized
   IDs, rejected boot requests and retained OFF-reset retries. Read pinned SDK
   dispatch/event semantics before implementing; do not replace SDK with mocks.
-- [ ] Resolve each incoming Device ID against current slots, share existing boot
+- [x] Resolve each incoming Device ID against current slots, share existing boot
   and shutdown validation, report rejection reasons without secrets. Retry failed
   OFF reset at a bounded cadence without blocking or replaying boot commands.
-- [ ] Add failing tests for nonoverlapping polling and hidden-tab behavior.
-- [ ] Add one authenticated bootstrap response containing config and status;
+- [x] Add failing tests for nonoverlapping polling and hidden-tab behavior.
+- [x] Add one authenticated bootstrap response containing config and status;
   preserve old endpoints. Use a single shared status/config serialization path.
-- [ ] Cache gzip public UI with a content-derived ETag and conditional GET;
+- [x] Cache gzip public UI with a content-derived ETag and conditional GET;
   keep sensitive responses no-store. Prevent overlapping polls, pause hidden tabs,
   recover on visibility, and bound fetch duration. Prioritize Sinric servicing.
-- [ ] Run relevant tests, regenerate assets through existing script, self-review,
+- [x] Run relevant tests, regenerate assets through existing script, self-review,
   commit and provide report. No push; controller publishes after full review.
 
 ## Task 2: MicroLink transport and diagnostics
@@ -36,23 +36,23 @@ scripts/embed_web.py and regression tests.
 Files: components/microlink/src/ml_derp.c, ml_coord.c, ml_wg_mgr.c,
 wireguard sources, microlink runtime/header and dashboard status rendering.
 
-- [ ] Inspect current state transitions and allocation lifetimes; use primary
+- [x] Inspect current state transitions and allocation lifetimes; use primary
   protocol sources to distinguish ServerInfo startup semantics from validity.
-- [ ] Add failing behavioral tests for each extracted transport/scheduling policy.
-- [ ] Consume ServerInfo through incremental receive handling, preserving bounds
+- [x] Add failing behavioral tests for each extracted transport/scheduling policy.
+- [x] Consume ServerInfo through incremental receive handling, preserving bounds
   and transport cleanup; don't wait for DERP in the coordinator task.
-- [ ] Preserve fragmented DERP headers/payloads across polls and treat EOF as a
+- [x] Preserve fragmented DERP headers/payloads across polls and treat EOF as a
   disconnect. For long-poll HTTP/2/MapResponse, don't silently discard incomplete
   updates: preserve framing across Noise records or fail explicitly and reconnect
   for a fresh map, with regression cases for fragmentation and closed streams.
-- [ ] Make failed long-poll startup/reconnect visible and avoid declaring usable
+- [x] Make failed long-poll startup/reconnect visible and avoid declaring usable
   connectivity from control registration alone. Expose safe aggregate diagnostic
   counters/states (no keys), using existing synchronization where required.
-- [ ] Prioritize WireGuard packets over a bounded discovery batch, avoid redundant
+- [x] Prioritize WireGuard packets over a bounded discovery batch, avoid redundant
   relay PONGs for direct requests, and suppress hot-path unconditional serial logs.
-- [ ] Coordinate low-memory TLS retry admission/backoff without disabling local
+- [x] Coordinate low-memory TLS retry admission/backoff without disabling local
   access, permanently starving Sinric, or pretending a threshold guarantees success.
-- [ ] Run relevant tests, self-review, commit and provide report. Document anything
+- [x] Run relevant tests, self-review, commit and provide report. Document anything
   remaining dependent on hardware reproduction rather than speculative rewrites.
 
 ## Task 3: Verification, documentation and publication

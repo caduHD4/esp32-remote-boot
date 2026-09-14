@@ -125,32 +125,20 @@ static int coord_send(microlink_t *ml, const uint8_t *data, size_t len) {
 }
 
 static int coord_recv(microlink_t *ml, uint8_t *buf, size_t len) {
+    struct timeval receive_timeout = { .tv_sec = 0, .tv_usec = 250000 };
+    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof(receive_timeout));
     size_t recvd = 0;
-    int retries = 0;
+    uint64_t started = ml_get_time_ms();
     while (recvd < len) {
         int n = ml_recv(ml->coord_sock, buf + recvd, len - recvd, 0);
-        if (n <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                if (recvd == 0) {
-                    /* No data consumed yet — timeout is fine, caller can retry */
-                    return -1;
-                }
-                /* Partial data consumed — we MUST finish this read or the
-                 * Noise frame stream will be misaligned. Retry with backoff. */
-                if (++retries > 300) {  /* ~3 seconds */
-                    ESP_LOGE(TAG, "coord_recv partial timeout: %d/%d bytes",
-                             (int)recvd, (int)len);
-                    return -1;
-                }
-                vTaskDelay(pdMS_TO_TICKS(10));
-                continue;
-            }
-            ESP_LOGE(TAG, "coord_recv failed: %d (errno %d, recvd %d/%d)",
-                     n, errno, (int)recvd, (int)len);
-            return -1;
+        int result = ml_receive_result(n, errno);
+        if (result < 0) return -1;
+        if (result == 0) {
+            if (ml_get_time_ms() - started >= 10000) return -1;
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
         }
         recvd += n;
-        retries = 0;  /* Reset on successful read */
     }
     return 0;
 }
@@ -207,17 +195,9 @@ static int noise_recv(microlink_t *ml, ml_noise_state_t *noise,
     uint8_t *ciphertext = ml_psram_malloc(ct_len);
     if (!ciphertext) return -1;
 
-    /* Header already consumed — payload read MUST complete or stream
-     * alignment is permanently lost. Retry EAGAIN (coord_recv returns -1
-     * with errno==EAGAIN if recvd==0 on first byte). */
-    int payload_retries = 0;
-    while (coord_recv(ml, ciphertext, ct_len) < 0) {
-        if ((errno == EAGAIN || errno == EWOULDBLOCK) && ++payload_retries <= 300) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-        ESP_LOGE(TAG, "noise_recv payload failed: ct_len=%d retries=%d errno=%d",
-                 ct_len, payload_retries, errno);
+    /* A failed partial receive invalidates the connection. Never restart the
+     * payload at offset zero after consuming ciphertext bytes. */
+    if (coord_recv(ml, ciphertext, ct_len) < 0) {
         free(ciphertext);
         return -1;
     }
@@ -2226,119 +2206,19 @@ static int do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *noise) {
     return 0;
 }
 
-/* Try to read one incremental MapResponse update (non-blocking) */
-static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
-    /* Use select() to check if data is available before blocking in recv */
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    FD_SET(ml->coord_sock, &readfds);
-    struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };  /* 50ms */
-    int sel = ml_select_fds(ml->coord_sock + 1, &readfds, NULL, NULL, &tv);
-    if (sel <= 0) return 0;  /* No data available or error */
-
-    /* Data available — set short recv timeout for partial frame safety */
-    struct timeval tv_recv = { .tv_sec = 2, .tv_usec = 0 };
-    ml_setsockopt(ml->coord_sock, SOL_SOCKET, SO_RCVTIMEO, &tv_recv, sizeof(tv_recv));
-
-    uint8_t *frame_buf = ml_psram_malloc(ML_NOISE_FRAME_BUFFER_SIZE);
-    if (!frame_buf) return 0;
-
-    int frame_len = noise_recv(ml, noise, frame_buf, ML_NOISE_FRAME_BUFFER_SIZE);
-
-    if (frame_len <= 0) {
-        free(frame_buf);
-        int saved_errno = errno;
-        /* EAGAIN/EWOULDBLOCK = no data yet = not an error */
-        if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK) return 0;
-        return frame_len;  /* Real error or connection closed */
-    }
-
-    /* Extract DATA frame payload from H2 frames, track flow control */
-    uint8_t *json_data = NULL;
-    size_t json_data_len = 0;
-    uint32_t total_data_bytes = 0;
-    uint32_t data_stream_id = 0;
-    int pos = 0;
-
-    while (pos + 9 <= frame_len) {
-        uint32_t f_len = (frame_buf[pos] << 16) | (frame_buf[pos + 1] << 8) | frame_buf[pos + 2];
-        uint8_t f_type = frame_buf[pos + 3];
-        uint8_t f_flags = frame_buf[pos + 4];
-        uint32_t f_stream = ((frame_buf[pos + 5] & 0x7F) << 24) | (frame_buf[pos + 6] << 16) |
-                             (frame_buf[pos + 7] << 8) | frame_buf[pos + 8];
-        pos += 9;
-
-        if (pos + (int)f_len > frame_len) break;
-
-        if (f_type == 0x00) {  /* DATA frame */
-            total_data_bytes += f_len;
-            if (f_stream == 5) {
-                /* Long-poll MapResponse data (stream 5) — parse as JSON */
-                data_stream_id = f_stream;
-                if (f_len > 0) {
-                    json_data = frame_buf + pos;
-                    json_data_len = f_len;
-                }
-            } else if (f_len > 0) {
-                /* Endpoint update response (stream 7+) — discard body */
-                ESP_LOGD(TAG, "H2 stream %lu DATA: %lu bytes (discarded)",
-                         (unsigned long)f_stream, (unsigned long)f_len);
-            }
-        } else if (f_type == 0x06 && f_len == 8 && !(f_flags & 0x01)) {
-            /* HTTP/2 PING from server — respond with PONG (same payload, ACK flag) */
-            uint8_t pong[17];
-            pong[0] = 0x00; pong[1] = 0x00; pong[2] = 0x08;
-            pong[3] = 0x06; pong[4] = 0x01;
-            pong[5] = 0x00; pong[6] = 0x00; pong[7] = 0x00; pong[8] = 0x00;
-            memcpy(pong + 9, frame_buf + pos, 8);
-            noise_send(ml, noise, pong, sizeof(pong));
-            ESP_LOGI(TAG, "Sent HTTP/2 PONG in response to server PING");
-        } else if (f_type == 0x04 && !(f_flags & 0x01)) {
-            /* HTTP/2 SETTINGS from server — respond with SETTINGS ACK */
-            uint8_t settings_ack[9] = {0x00, 0x00, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00};
-            noise_send(ml, noise, settings_ack, sizeof(settings_ack));
+/* Feed complete DATA bodies into the length-prefixed MapResponse stream. */
+static int consume_map_data(microlink_t *ml, const uint8_t *data, size_t len) {
+    while (len) {
+        size_t used = 0;
+        int ready = ml_frame_feed(&ml->map_rx, ML_FRAME_MAP, data, len, &used, 32768);
+        data += used; len -= used;
+        if (ready < 0) return -1;
+        if (!ready) return 0;
+        cJSON *update_json = cJSON_ParseWithLengthOpts((char *)ml->map_rx.payload, ml->map_rx.length + 1, NULL, true);
+        if (!cJSON_IsObject(update_json)) {
+            cJSON_Delete(update_json);
+            return -1; // Never silently discard a malformed or unsupported update.
         }
-        pos += f_len;
-    }
-
-    /* Send HTTP/2 WINDOW_UPDATE to replenish flow control after receiving DATA.
-     * Without this, the server's send window exhausts and the connection stalls.
-     * Must send for BOTH connection-level (stream 0) AND stream-level. (v1 reference) */
-    if (total_data_bytes > 0) {
-        uint8_t wu_buf[26];  /* 2 WINDOW_UPDATE frames: 13 bytes each */
-        /* Connection-level (stream 0) */
-        int wu_len = ml_h2_build_window_update(wu_buf, 13, 0, total_data_bytes);
-        /* Stream-level */
-        if (data_stream_id > 0) {
-            wu_len += ml_h2_build_window_update(wu_buf + wu_len, 13,
-                                                  data_stream_id, total_data_bytes);
-        }
-        noise_send(ml, noise, wu_buf, wu_len);
-    }
-
-    if (!json_data || json_data_len == 0) {
-        /* Keepalive, SETTINGS, or PING frame - not an error */
-        free(frame_buf);
-        return 1;  /* Got data, reset watchdog */
-    }
-
-    /* Skip 4-byte length prefix if present */
-    char *parse_start = (char *)json_data;
-    size_t parse_len = json_data_len;
-    if (parse_len > 4 && parse_start[4] == '{') {
-        parse_start += 4;
-        parse_len -= 4;
-    }
-
-    char saved = parse_start[parse_len];
-    parse_start[parse_len] = '\0';
-
-    cJSON *update_json = cJSON_Parse(parse_start);
-    parse_start[parse_len] = saved;
-
-    if (update_json) {
-        ESP_LOGI(TAG, "Long-poll MapResponse update received");
-
         /* Update VPN IP if present */
         cJSON *node = cJSON_GetObjectItem(update_json, "Node");
         if (node) {
@@ -2361,10 +2241,88 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
         /* Parse peer updates */
         parse_peers_from_map_response(ml, update_json);
         cJSON_Delete(update_json);
+        __atomic_store_n(&ml->diagnostics.control_online, 1, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&ml->diagnostics.map_updates, 1, __ATOMIC_RELAXED);
+        ml_frame_reset(&ml->map_rx);
     }
+    return 0;
+}
 
-    free(frame_buf);
-    return 1;
+static int consume_h2_frame(microlink_t *ml, ml_noise_state_t *noise) {
+    ml_frame_reader *r = &ml->h2_rx;
+    uint8_t type = r->header[3], flags = r->header[4];
+    uint32_t stream = ((uint32_t)(r->header[5]&127)<<24) |
+        ((uint32_t)r->header[6]<<16) | ((uint32_t)r->header[7]<<8) | r->header[8];
+    if (ml_h2_stream_closed(type, flags, stream)) return -1;
+    if (type == 0) {
+        size_t offset = 0, length = r->length;
+        if (flags & 8) { // HTTP/2 DATA padding counts toward flow control.
+            if (!length || r->payload[0] >= length) return -1;
+            offset = 1; length -= 1 + r->payload[0];
+        }
+        if (stream == 5 && consume_map_data(ml, r->payload + offset, length) < 0) return -1;
+        if (r->length) {
+            uint8_t wu[26];
+            int n = ml_h2_build_window_update(wu, 13, 0, r->length);
+            if (n < 0) return -1;
+            int next = ml_h2_build_window_update(wu+n, 13, stream, r->length);
+            if (next < 0 || noise_send(ml, noise, wu, n+next) < 0) return -1;
+        }
+    } else if (type == 6) {
+        if (r->length != 8 || stream != 0) return -1;
+        if (!(flags & 1)) {
+            uint8_t pong[17] = {0,0,8,6,1,0,0,0,0};
+            memcpy(pong+9,r->payload,8);
+            if (noise_send(ml,noise,pong,sizeof(pong)) < 0) return -1;
+        }
+    } else if (type == 4 && !(flags & 1)) {
+        uint8_t ack[9] = {0,0,0,4,1,0,0,0,0};
+        if (stream != 0 || r->length % 6 != 0 || noise_send(ml,noise,ack,sizeof(ack)) < 0) return -1;
+    }
+    return 0;
+}
+
+/* Poll at most one bounded fragment; Noise, H2 and map boundaries are
+ * independent. All three readers survive ordinary socket/record fragmentation. */
+static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
+    ml_frame_reader *r = &ml->coord_rx;
+    uint32_t now = (uint32_t)ml_get_time_ms();
+    if (r->header_used && (uint32_t)(now-ml->coord_rx_started_ms) > 10000) return -1;
+    fd_set readfds;
+    FD_ZERO(&readfds); FD_SET(ml->coord_sock, &readfds);
+    struct timeval tv = { .tv_sec=0, .tv_usec=1000 };
+    int sel = ml_select_fds(ml->coord_sock+1,&readfds,NULL,NULL,&tv);
+    if (sel < 0) return errno == EINTR ? 0 : -1;
+    if (!sel) return 0;
+    uint8_t chunk[1024];
+    size_t want = r->header_used < 3 ? 3-r->header_used : r->length-r->used;
+    if (want > sizeof(chunk)) want = sizeof(chunk);
+    int n = ml_recv(ml->coord_sock,chunk,want,0);
+    int result = ml_receive_result(n,errno);
+    if (result <= 0) return result;
+    if (!r->header_used) ml->coord_rx_started_ms = now;
+    size_t used;
+    int ready = ml_frame_feed(r,ML_FRAME_NOISE,chunk,n,&used,ML_NOISE_FRAME_BUFFER_SIZE);
+    if (ready <= 0) return ready;
+    size_t plain_len = r->length-16;
+    uint8_t *plain = ml_psram_malloc(plain_len ? plain_len : 1);
+    if (!plain) return -1;
+    if (ml_noise_decrypt(noise->rx_key,noise->rx_nonce,NULL,0,r->payload,r->length,plain) != ESP_OK) {
+        free(plain); return -1;
+    }
+    noise->rx_nonce++;
+    ml_frame_reset(r);
+    size_t pos = 0;
+    while (pos < plain_len) {
+        ready = ml_frame_feed(&ml->h2_rx,ML_FRAME_H2,plain+pos,plain_len-pos,&used,32768);
+        pos += used;
+        if (ready < 0 || (ready > 0 && consume_h2_frame(ml,noise) < 0)) {
+            free(plain); return -1;
+        }
+        if (ready > 0) ml_frame_reset(&ml->h2_rx);
+    }
+    free(plain);
+    return 1; // Authenticated receive, not a local ping send.
 }
 
 /* ============================================================================
@@ -2407,6 +2365,10 @@ void ml_coord_task(void *arg) {
                 }
                 break;
             case ML_CMD_DISCONNECT:
+                ml_frame_reset(&ml->coord_rx);
+                ml_frame_reset(&ml->h2_rx);
+                ml_frame_reset(&ml->map_rx);
+                __atomic_store_n(&ml->diagnostics.control_online, 0, __ATOMIC_RELAXED);
                 if (ml->coord_sock >= 0) {
                     ml_close_sock(ml->coord_sock);
                     ml->coord_sock = -1;
@@ -2524,15 +2486,13 @@ void ml_coord_task(void *arg) {
             /* Signal DERP I/O task to connect (connection now owned by I/O task) */
             if (!ml->derp.connected) {
                 xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
-                /* Wait for DERP to connect (up to 15s) before continuing */
-                ESP_LOGI(TAG, "Waiting for DERP I/O task to connect...");
-                xEventGroupWaitBits(ml->events, ML_EVT_DERP_CONNECTED,
-                                    pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
             }
 
             /* Start streaming long-poll for incremental updates */
             if (do_start_long_poll(ml, &noise) < 0) {
-                ESP_LOGW(TAG, "Failed to start long-poll (non-fatal)");
+                ESP_LOGW(TAG, "Failed to start long-poll; reconnecting");
+                state = COORD_RECONNECTING;
+                break;
             }
 
             /* Send initial endpoint update if STUN already completed.
@@ -2550,7 +2510,10 @@ void ml_coord_task(void *arg) {
                 ping_frame[5] = 0x00; ping_frame[6] = 0x00;
                 ping_frame[7] = 0x00; ping_frame[8] = 0x00;
                 memset(ping_frame + 9, 0x42, 8);
-                noise_send(ml, &noise, ping_frame, sizeof(ping_frame));
+                if (noise_send(ml, &noise, ping_frame, sizeof(ping_frame)) < 0) {
+                    state = COORD_RECONNECTING;
+                    break;
+                }
                 ESP_LOGI(TAG, "Sent initial HTTP/2 PING after long-poll");
             }
 
@@ -2763,7 +2726,6 @@ void ml_coord_task(void *arg) {
                     int ping_ret = noise_send(ml, &noise, ping_frame, sizeof(ping_frame));
                     if (ping_ret >= 0) {
                         last_h2_ping_ms = now;
-                        last_activity_ms = now;
                     } else {
                         ESP_LOGW(TAG, "H2 PING send failed, reconnecting");
                         state = COORD_RECONNECTING;
@@ -2786,6 +2748,11 @@ void ml_coord_task(void *arg) {
             break;
 
         case COORD_RECONNECTING:
+            __atomic_store_n(&ml->diagnostics.control_online, 0, __ATOMIC_RELAXED);
+            __atomic_add_fetch(&ml->diagnostics.reconnects, 1, __ATOMIC_RELAXED);
+            ml_frame_reset(&ml->coord_rx);
+            ml_frame_reset(&ml->h2_rx);
+            ml_frame_reset(&ml->map_rx);
             {
                 uint32_t backoff_ms = 1000 << (reconnect_attempts > 4 ? 4 : reconnect_attempts);
                 if (backoff_ms > ML_CTRL_BACKOFF_MAX_MS) backoff_ms = ML_CTRL_BACKOFF_MAX_MS;
@@ -2829,6 +2796,10 @@ void ml_coord_task(void *arg) {
     }
     memset(&noise, 0, sizeof(noise));
 
+    ml_frame_reset(&ml->coord_rx);
+    ml_frame_reset(&ml->h2_rx);
+    ml_frame_reset(&ml->map_rx);
+    __atomic_store_n(&ml->diagnostics.control_online, 0, __ATOMIC_RELAXED);
     ESP_LOGI(TAG, "Coord task exiting");
     vTaskDelete(NULL);
 }
