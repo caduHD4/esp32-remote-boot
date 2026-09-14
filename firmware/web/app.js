@@ -33,10 +33,21 @@ function formatTailscaleStatus(tailscale={}){
   const value=states[tailscale.state]||['AGUARDANDO','Acesso local preservado'];
   return {label:value[0],detail:value[1],tone:'warning'};
 }
-globalThis.RemoteBootValidation={validateSinric,formatTailscaleStatus};
+function createStatusPoller({poll,isHidden}){
+  let pending=false;
+  const tick=()=>{
+    if(pending||isHidden())return;
+    pending=true;
+    let request;try{request=poll()}catch(_){pending=false;return}
+    Promise.resolve(request).catch(()=>{}).finally(()=>{pending=false})
+  };
+  return {tick,visibilityChanged:()=>{if(!isHidden())tick()}}
+}
+function statusControls(state){return {shutdownDisabled:!state.shutdown_enabled}}
+globalThis.RemoteBootValidation={validateSinric,formatTailscaleStatus,createStatusPoller,statusControls};
 if(typeof document!=='undefined'){
 const $=id=>document.getElementById(id);
-let token='',cfg={},systems=[],slots=[],refreshTimer;
+let token='',cfg={},systems=[],slots=[],refreshTimer,statusPoller,statusRequest;
 const pageNames={overview:'Visão geral',boot:'Boot',settings:'Configuração',sinric:'Sinric Pro',system:'Sistema'};
 const fields=[
   ['Rede','Conexão do ESP32 com a rede local',[
@@ -57,11 +68,13 @@ function message(text){$('message').textContent=text}
 function showToast(text,error=false){const host=$(error?'toastAlert':'toastStatus');const item=document.createElement('div');item.className='toast'+(error?' error':'');item.textContent=text;host.append(item);setTimeout(()=>item.remove(),4600);message(text)}
 function apiError(code){const known={AUTH_REQUIRED:'Informe o token administrativo.',FORBIDDEN:'Token inválido ou sem permissão.',INVALID_CONFIG:'Revise os campos destacados.',SCHEMA_LOCKED:'A configuração está bloqueada por incompatibilidade.',PC_ALREADY_ON:'O computador já está online.',SINRIC_CREDENTIALS_REQUIRED:'Informe App Key e App Secret antes de ativar o Sinric.'};return known[code]?known[code]+' ('+code+')':code}
 async function api(path,method='GET',data){
-  let response;
-  try{response=await fetch('/api/v1/'+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(data?{body:JSON.stringify(data)}:{})})}
-  catch(_){throw Error('Não foi possível acessar o ESP32. Verifique a rede.')}
-  let result={};try{result=await response.json()}catch(_){if(!response.ok)throw Error('Resposta inválida do ESP32 ('+response.status+').')}
-  if(!response.ok)throw Error(apiError(result.error||String(response.status)));return result
+  let response;const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),8000);
+  try{
+    try{response=await fetch('/api/v1/'+path,{method,signal:controller.signal,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(data?{body:JSON.stringify(data)}:{})})}
+    catch(_){throw Error('Não foi possível acessar o ESP32. Verifique a rede.')}
+    let result={};try{result=await response.json()}catch(_){if(!response.ok)throw Error('Resposta inválida do ESP32 ('+response.status+').');throw Error('Não foi possível acessar o ESP32. Verifique a rede.')}
+    if(!response.ok)throw Error(apiError(result.error||String(response.status)));return result
+  }finally{clearTimeout(timeout)}
 }
 function setBusy(button,busy,label){
   if(!button)return;
@@ -170,15 +183,19 @@ function updateStatusCards(state){
   const tailscale=formatTailscaleStatus(state.tailscale);$('cardTailscale').textContent=tailscale.label;$('cardTailscale').className='status-value '+tailscale.tone;$('cardTailscaleDetail').textContent=tailscale.detail;
   $('topBadge').textContent=state.online?'PC online':'PC offline';$('topBadge').className='badge '+(state.online?'online':'offline');$('sideDot').className='status-dot '+(state.online?'online':'');$('sideStatus').textContent=state.online?'PC online':'PC offline'
 }
-async function status(){
-  const state=await api('status');$('shutdown').disabled=!state.shutdown_enabled;updateStatusCards(state);
-  $('setupInfo').textContent=state.config_locked?'Configuração preservada, porém incompatível ou corrompida.':state.setup_mode?'Configure Wi-Fi, MAC e dois tokens diferentes para concluir.':'Campos de senha vazios mantêm os valores existentes.';
-  return state
+function applyStatus(state){
+  $('shutdown').disabled=statusControls(state).shutdownDisabled;updateStatusCards(state);
+  $('setupInfo').textContent=state.config_locked?'Configuração preservada, porém incompatível ou corrompida.':state.setup_mode?'Configure Wi-Fi, MAC e dois tokens diferentes para concluir.':'Campos de senha vazios mantêm os valores existentes.'
+}
+function status(){
+  if(statusRequest)return statusRequest;
+  statusRequest=(async()=>{const state=await api('status');applyStatus(state);return state})().finally(()=>{statusRequest=null});
+  return statusRequest
 }
 async function connect(){
   token=$('token').value.trim();$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
   try{
-    cfg=await api('config');systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();await status();clearInterval(refreshTimer);refreshTimer=setInterval(()=>status().catch(error=>showToast(error.message,true)),10000);showToast('Dashboard conectada.')
+    const initial=await api('bootstrap');cfg=initial.config;systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();applyStatus(initial.status);clearInterval(refreshTimer);statusPoller=createStatusPoller({poll:()=>status().catch(error=>showToast(error.message,true)),isHidden:()=>document.hidden});refreshTimer=setInterval(statusPoller.tick,10000);showToast('Dashboard conectada.')
   }catch(error){$('loginError').textContent=error.message;$('loginError').hidden=false}
   finally{setBusy($('connect'),false)}
 }
@@ -199,6 +216,7 @@ function collectPatch(validatedSlots=slots){
   patch.systems=systems;patch.sinric_slots=validatedSlots;return patch
 }
 $('connect').onclick=connect;$('token').addEventListener('keydown',event=>{if(event.key==='Enter')connect()});
+document.addEventListener('visibilitychange',()=>statusPoller?.visibilityChanged());
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>setActiveView(button.dataset.view)));
 $('refreshStatus').onclick=button=>action(()=>status(),button.currentTarget,'Status atualizado.');
 $('showHidden').onchange=renderButtons;

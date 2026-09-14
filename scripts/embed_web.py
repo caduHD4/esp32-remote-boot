@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 from pathlib import Path
 
 
@@ -13,12 +14,14 @@ def build_web_document(root: Path) -> bytes:
 
 def write_web_asset(root: Path) -> None:
     data = gzip.compress(build_web_document(root), mtime=0)
+    etag = hashlib.sha256(data).hexdigest()[:16]
     target = root / "firmware/include/web_asset.h"
     target.write_text(
         "#pragma once\n#include <pgmspace.h>\n"
         "const unsigned char webAsset[] PROGMEM = {"
         + ",".join(map(str, data))
         + "};\n"
+        + f'const char webAssetEtag[] = "{etag}";\n'
     )
 
 

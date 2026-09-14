@@ -97,9 +97,9 @@ bool validate(JsonDocument& d) {
     for(const char* k:{"default_target","fallback_boot_id"}) if(strlen(d[k]|"") && !exists(idValue(d[k]))) return false;
     JsonArray slots=d["sinric_slots"].as<JsonArray>(); if(slots.isNull()||slots.size()>8) return false;
     for(size_t i=0;i<slots.size();++i) {
-        String sid=slots[i]["device_id"]|""; if(sid.length()!=24) return false;
-        for(char c:sid) if(!isxdigit(c)) return false;
-        for(size_t j=0;j<i;++j) if(sid==slots[j]["device_id"].as<String>()) return false;
+        char sid[25]; if(!rb::normalizeSinricDeviceId(slots[i]["device_id"]|"",sid)) return false;
+        slots[i]["device_id"]=sid;
+        for(size_t j=0;j<i;++j) if(rb::sinricDeviceIdEqual(sid,slots[j]["device_id"]|"")) return false;
         String target=slots[i]["boot_id"]|"";
         if(target!="default"&&target!="shutdown"&&!exists(idValue(slots[i]["boot_id"]))) return false;
     }
@@ -156,33 +156,34 @@ bool connectWiFi(const char* ssid,const char* password) {
     uint32_t start=millis(); while(WiFi.status()!=WL_CONNECTED&&millis()-start<20000) delay(50);
     return WiFi.status()==WL_CONNECTED;
 }
+void appendStatus(JsonObject d) {
+    d["version"]=Version; d["setup_mode"]=setupMode; d["config_locked"]=locked; d["online"]=state.online(millis());
+    d["os"]=osName; d["hostname"]=hostName; d["ip"]=WiFi.localIP().toString(); d["rssi"]=WiFi.RSSI();
+    d["sinric_online"]=sinricOnline; d["uptime"]=millis()/1000; d["heap"]=ESP.getFreeHeap();
+    d["agent_transport"]=socketAgent>=0?"websocket":"http-legacy";
+    d["reboot_enabled"]=agentRebootEnabled && state.online(millis());
+    d["shutdown_enabled"]=agentShutdownEnabled && agentSession.length()>=16 && state.online(millis());
+    d["pending_target"]=idText(state.pendingValid(millis())?state.pending:-1); d["default_target"]=idText(state.defaultTarget);
+    d["last_selected_target"]=idText(state.lastSelected); d["pending_created_at_ms"]=state.created; d["pending_ttl_s"]=state.ttl/1000;
+    const rb::MicrolinkSnapshot tail=microlink.snapshot(); JsonObject tailscale=d["tailscale"].to<JsonObject>();
+    tailscale["built"]=tail.built; tailscale["configured"]=tail.configured; tailscale["connected"]=tail.connected;
+    tailscale["state"]=tail.state; tailscale["ip"]=tail.ip; tailscale["peers"]=tail.peers;
+    tailscale["heap_free"]=tail.heapFree; tailscale["heap_minimum"]=tail.heapMinimum; tailscale["largest_block"]=tail.largestBlock;
+}
 void routes() {
-    const char* headers[]={"Authorization"}; server.collectHeaders(headers,1);
-    server.on("/",HTTP_GET,[]{ server.sendHeader("Content-Encoding","gzip"); server.send_P(200,"text/html",reinterpret_cast<const char*>(webAsset),sizeof webAsset); });
+    const char* headers[]={"Authorization","If-None-Match"}; server.collectHeaders(headers,2);
+    server.on("/",HTTP_GET,[]{ String etag=String('"')+webAssetEtag+'"'; server.sendHeader("ETag",etag); server.sendHeader("Cache-Control","public, max-age=0, must-revalidate"); if(server.header("If-None-Match")==etag) { server.send(304); return; } server.sendHeader("Content-Encoding","gzip"); server.send_P(200,"text/html",reinterpret_cast<const char*>(webAsset),sizeof webAsset); });
     server.on("/boot.ipxe",HTTP_GET,[]{
         int target=locked?-1:state.dispatch(millis()); String script="#!ipxe\n";
         if(target>=0) { script+="imgexec RemoteBoot.efi boot="+idText(target); if(state.valid(state.fallback)&&state.fallback!=target) script+=" fallback="+idText(state.fallback); script+=" || goto failed\nexit\n:failed\necho RemoteBoot failed\nexit 1\n"; }
         else script+="exit\n";
         server.sendHeader("Cache-Control","no-store"); server.send(200,"text/plain",script);
     });
-    server.on("/api/v1/status",HTTP_GET,[]{ if(!auth()) return; JsonDocument d;
-        d["version"]=Version; d["setup_mode"]=setupMode; d["config_locked"]=locked; d["online"]=state.online(millis());
-        d["os"]=osName; d["hostname"]=hostName; d["ip"]=WiFi.localIP().toString(); d["rssi"]=WiFi.RSSI();
-        d["sinric_online"]=sinricOnline; d["uptime"]=millis()/1000; d["heap"]=ESP.getFreeHeap();
-        d["agent_transport"]=socketAgent>=0?"websocket":"http-legacy";
-        d["reboot_enabled"]=agentRebootEnabled && state.online(millis());
-        d["shutdown_enabled"]=agentShutdownEnabled && agentSession.length()>=16 && state.online(millis());
-        d["pending_target"]=idText(state.pendingValid(millis())?state.pending:-1); d["default_target"]=idText(state.defaultTarget);
-        d["last_selected_target"]=idText(state.lastSelected); d["pending_created_at_ms"]=state.created; d["pending_ttl_s"]=state.ttl/1000;
-        const rb::MicrolinkSnapshot tail=microlink.snapshot(); JsonObject tailscale=d["tailscale"].to<JsonObject>();
-        tailscale["built"]=tail.built; tailscale["configured"]=tail.configured; tailscale["connected"]=tail.connected;
-        tailscale["state"]=tail.state; tailscale["ip"]=tail.ip; tailscale["peers"]=tail.peers;
-        tailscale["heap_free"]=tail.heapFree; tailscale["heap_minimum"]=tail.heapMinimum; tailscale["largest_block"]=tail.largestBlock;
-        jsonReply(200,d);
-    });
+    server.on("/api/v1/status",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; appendStatus(d.to<JsonObject>()); jsonReply(200,d); });
     server.on("/api/v1/config",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; rb::redactConfig(config,d);
         jsonReply(200,d);
     });
+    server.on("/api/v1/bootstrap",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; rb::redactConfig(config,d["config"].to<JsonObject>()); appendStatus(d["status"].to<JsonObject>()); jsonReply(200,d); });
     server.on("/api/v1/config",HTTP_PUT,[]{ if(!auth()) return; if(locked) { errorReply(409,"SCHEMA_LOCKED"); return; }
         JsonDocument patch,next; if(!body(patch)) return; next.set(config);
         const char* allowed="|ssid|wifi_password|admin_token|agent_token|pc_name|mac|dhcp|ip|subnet|gateway|dns|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|sinric_enabled|sinric_app_key|sinric_app_secret|sinric_slots|systems|";
@@ -325,14 +326,23 @@ void startSinric() {
     for(JsonObject slot:config["sinric_slots"].as<JsonArray>()) {
         slotIds[i]=slot["device_id"].as<String>(); size_t index=i++;
         SinricProSwitch& device=SinricPro[slotIds[index]];
-        device.onPowerState([index](const String& deviceId,bool& on){
-            (void)deviceId; if(!on) return true;
-            JsonObject slot=config["sinric_slots"][index];
-            if(slot.isNull()||slotIds[index]!=slot["device_id"].as<String>()) return false;
+        device.onPowerState([](const String& deviceId,bool& on){
+            if(!on) return true;
+            logEvent("SINRIC_COMMAND_RECEIVED");
+            const char* currentIds[8]{}; size_t currentCount=0;
+            for(JsonObject current:config["sinric_slots"].as<JsonArray>()) currentIds[currentCount++]=current["device_id"]|"";
+            int currentIndex=rb::sinricSlotForDevice(currentIds,currentCount,deviceId.c_str());
+            if(currentIndex<0) { logEvent("SINRIC_DEVICE_NOT_CONFIGURED"); return false; }
+            JsonObject slot=config["sinric_slots"][currentIndex];
             String target=slot["boot_id"]|"default";
-            if(target=="shutdown") { if(requestShutdown()!=202) return false; slotReset[index]=millis()+1000; return true; }
-            int id=target=="default"?(state.pendingValid(millis())?state.pending:state.defaultTarget):idValue(slot["boot_id"]);
-            if(requestBoot(id,false)!=202) return false; slotReset[index]=millis()+1000; return true;
+            int code;
+            if(target=="shutdown") { logEvent("SINRIC_SHUTDOWN_REQUESTED"); code=requestShutdown(); }
+            else { logEvent("SINRIC_BOOT_REQUESTED"); int id=target=="default"?(state.pendingValid(millis())?state.pending:state.defaultTarget):idValue(slot["boot_id"]); code=requestBoot(id,false); }
+            const char* registeredIds[8]{}; for(int j=0;j<8;++j) registeredIds[j]=slotIds[j].c_str();
+            int registered=rb::sinricSlotForDevice(registeredIds,8,deviceId.c_str());
+            if(registered<0) { logEvent("SINRIC_DEVICE_NOT_REGISTERED"); return false; }
+            if(!rb::acceptSinricDispatch(code,millis(),slotReset[registered])) { logEvent(code==403?"SINRIC_REJECTED_DISABLED":code==409?"SINRIC_REJECTED_STATE":code==429?"SINRIC_REJECTED_RATE":"SINRIC_REJECTED_UNAVAILABLE"); return false; }
+            return true;
         });
     }
     SinricPro.onConnected([]{sinricOnline=true;}); SinricPro.onDisconnected([]{sinricOnline=false;});
@@ -369,8 +379,8 @@ void setup() {
     routes(); startAgentSocket(); startSinric(); microlink.begin(locked,setupMode,WiFi.status()==WL_CONNECTED); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
 }
 void loop() {
+    if(sinricStarted) { SinricPro.handle(); for(int i=0;i<8;++i) if(rb::sinricResetDue(slotReset[i],millis())) { SinricProSwitch& d=SinricPro[slotIds[i]]; slotReset[i]=rb::nextSinricReset(millis(),d.sendPowerStateEvent(false)); } }
     server.handleClient(); agentSocketTick(); if(setupNetwork.shouldProcessDns()) dns.processNextRequest(); wolTick(); microlink.tick(WiFi.status()==WL_CONNECTED);
-    if(sinricStarted) { SinricPro.handle(); for(int i=0;i<8;++i) if(slotReset[i]&&static_cast<int32_t>(millis()-slotReset[i])>=0) { SinricProSwitch& d=SinricPro[slotIds[i]]; d.sendPowerStateEvent(false); slotReset[i]=0; } }
     if(setupNetwork.shouldStartRecoveryAp(WiFi.status()==WL_CONNECTED,millis())) setupAP();
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);
 }
