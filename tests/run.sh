@@ -5,10 +5,12 @@ temp=$(mktemp -d); trap 'rm -rf "$temp"' EXIT
 g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer "$root/tests/test_core.cpp" -o "$temp/test_core"
 "$temp/test_core"
 g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer "$root/tests/test_computer_policy.cpp" -o "$temp/test_computer_policy"
+"$temp/test_computer_policy"
+g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer "$root/tests/test_computer_runtime.cpp" -o "$temp/test_computer_runtime"
+"$temp/test_computer_runtime"
 pio pkg install -e esp32c3_4mb >/dev/null
 g++ -std=c++17 -Wall -Wextra -Werror -I"$root/.pio/libdeps/esp32c3_4mb/ArduinoJson/src" "$root/tests/test_config.cpp" -o "$temp/test_config"
 "$temp/test_config"
-"$temp/test_computer_policy"
 g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_boot_dispatch.cpp" -o "$temp/test_boot_dispatch"
 "$temp/test_boot_dispatch"
 g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined "$root/tests/test_power.cpp" -o "$temp/test_power"
