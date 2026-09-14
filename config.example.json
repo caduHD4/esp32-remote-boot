@@ -1,14 +1,29 @@
 {
+  "config_version": 3,
+  "setup_complete": false,
+  "setup_step": "password",
   "ssid": "EXAMPLE_WIFI",
   "wifi_password": "",
-  "admin_token": "REPLACE_WITH_RANDOM_ADMIN_TOKEN",
-  "agent_token": "REPLACE_WITH_RANDOM_AGENT_TOKEN",
-  "mac": "02:00:00:00:00:01",
+  "admin_token": "",
   "dhcp": true,
-  "default_target": "0001",
-  "fallback_boot_id": "0002",
-  "systems": [
-    {"id":"0001","name":"Example loader A","hidden":false,"blocked":false},
-    {"id":"0002","name":"Example loader B","hidden":false,"blocked":false}
+  "sinric_enabled": false,
+  "sinric_slots": [],
+  "tailscale_auth_key": "",
+  "tailscale_device_name": "remote-boot-esp32",
+  "computers": [
+    {
+      "id": "pc-000001",
+      "name": "Desktop",
+      "mac": "02:00:00:00:00:01",
+      "agent_token": "",
+      "wol_port": 9,
+      "wol_repeat": 3,
+      "wol_interval_ms": 100,
+      "pending_ttl_s": 180,
+      "physical_boot_behavior": "exit_to_firmware",
+      "default_target": "",
+      "fallback_boot_id": "",
+      "systems": []
+    }
   ]
 }
