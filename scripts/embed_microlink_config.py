@@ -17,6 +17,32 @@ def c_string(value):
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def sdkconfig_values(path):
+    values = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("CONFIG_") and "=" in line:
+            key, value = line.split("=", 1)
+            values[key] = value
+        elif line.startswith("# CONFIG_") and line.endswith(" is not set"):
+            values[line[2:-11]] = None
+    return values
+
+
+def invalidate_stale_sdkconfig(defaults, generated):
+    if not generated.exists():
+        return False
+
+    expected = sdkconfig_values(defaults)
+    current = sdkconfig_values(generated)
+    if all(current.get(key) == value for key, value in expected.items()):
+        return False
+
+    generated.unlink()
+    print(f"Removed stale generated SDK configuration: {generated.name}")
+    return True
+
+
 def generate(source, output):
     try:
         if not source.exists():
@@ -52,8 +78,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--sdkconfig-defaults", type=Path)
+    parser.add_argument("--sdkconfig-generated", type=Path)
     arguments = parser.parse_args()
     try:
+        if arguments.sdkconfig_defaults and arguments.sdkconfig_generated:
+            invalidate_stale_sdkconfig(
+                arguments.sdkconfig_defaults,
+                arguments.sdkconfig_generated,
+            )
         generate(arguments.input, arguments.output)
     except ValueError:
         return 1
@@ -66,6 +99,10 @@ else:
     Import("env")
     project_root = Path(env["PROJECT_DIR"])
     try:
+        invalidate_stale_sdkconfig(
+            project_root / "sdkconfig.defaults",
+            project_root / f"sdkconfig.{env['PIOENV']}",
+        )
         generate(
             project_root / "config.local.microlink.json",
             project_root / "firmware/include/microlink_config.generated.h",

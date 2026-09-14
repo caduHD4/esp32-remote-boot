@@ -51,6 +51,39 @@ class EmbedMicrolinkConfigTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("control", result.stderr)
 
+    def test_stale_generated_sdkconfig_is_invalidated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config.local.microlink.json"
+            output = root / "microlink_config.generated.h"
+            defaults = root / "sdkconfig.defaults"
+            generated = root / "sdkconfig.esp32c3_4mb_microlink"
+            source.write_text(
+                json.dumps({
+                    "auth_key": "tskey-auth-k12345678901234567890",
+                    "device_name": "esp",
+                }),
+                encoding="utf-8",
+            )
+            defaults.write_text("CONFIG_ML_H2_BUFFER_SIZE_KB=32\n", encoding="utf-8")
+            generated.write_text("CONFIG_ML_H2_BUFFER_SIZE_KB=64\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--input", str(source),
+                    "--output", str(output),
+                    "--sdkconfig-defaults", str(defaults),
+                    "--sdkconfig-generated", str(generated),
+                ],
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(generated.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
