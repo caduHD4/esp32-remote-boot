@@ -30,7 +30,16 @@ struct State {
     uint32_t created=0,ttl=180000,heartbeatAt=0,heartbeatExpiry=45000,dispatchedAt=0;
     bool heartbeatSeen=false,dispatchSeen=false;
     enum Behavior { Default, Last, Exit } behavior=Default;
-    bool valid(int id) const { for(size_t i=0;i<count;++i) if(entries[i].id==id) return !entries[i].blocked; return false; }
+    int entryIndex(int id) const {
+        for(size_t i=0;i<count;++i) if(entries[i].id==id) return static_cast<int>(i);
+        return None;
+    }
+    bool append(const Entry& entry) {
+        if(count>=MaxEntries||entryIndex(entry.id)!=None) return false;
+        entries[count++]=entry;
+        return true;
+    }
+    bool valid(int id) const { int index=entryIndex(id); return index!=None&&!entries[index].blocked; }
     bool online(uint32_t now) const { return heartbeatSeen && uint32_t(now-heartbeatAt)<heartbeatExpiry; }
     bool pendingValid(uint32_t now) const { return valid(pending) && uint32_t(now-created)<ttl; }
     int selected(uint32_t now) const {
@@ -62,4 +71,3 @@ struct State {
     }
 };
 }
-
