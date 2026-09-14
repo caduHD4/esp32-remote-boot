@@ -1,28 +1,145 @@
-<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Remote Boot</title>
-<style>body{font:16px system-ui;background:#101821;color:#edf3fa;max-width:1050px;margin:auto;padding:24px}h1{margin-bottom:4px}section{background:#1b2734;padding:20px;border-radius:12px;margin:18px 0}button,input,select{font:inherit;border-radius:6px;border:1px solid #617588;padding:9px;max-width:100%;box-sizing:border-box}input,select{background:#0e1720;color:white}button{background:#8dd9c4;color:#101821;cursor:pointer;margin:4px}label{display:flex;flex-direction:column;gap:6px;margin:12px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}small{color:#b4c4d4}#message{white-space:pre-wrap;color:#ffdb99}pre{white-space:pre-wrap;overflow-wrap:anywhere}.entry{border-bottom:1px solid #405261;padding:10px}label.check{display:inline-flex;flex-direction:row;margin:8px}details{margin:15px 0}summary{cursor:pointer;font-weight:bold}a{color:#8dd9c4}</style>
-<h1>Remote Boot</h1><small>Controle de inicialização • ESP32</small>
-<section id="login"><label>Token administrativo ou token de primeiro acesso<input id="token" type="password" autocomplete="off"></label><button id="connect">Conectar</button><p>No primeiro acesso, use a senha do AP exibida no monitor serial. Depois, use seu token administrativo.</p></section>
-<p id="message" role="status"></p><main id="app" hidden>
-<section><h2 id="online">Carregando</h2><p id="status"></p><div id="buttons"></div><label class="check"><input type="checkbox" id="showHidden">Mostrar entradas ocultas</label><button id="shutdown" disabled>Desligar PC</button><button id="rescan">Atualizar catálogo pelo agent</button></section>
-<section><h2>Configuração</h2><p id="setupInfo"></p><form id="settings"><div id="fields"></div><details open><summary>Sistemas e ordem de exibição</summary><div id="entries"></div></details><details><summary>Sinric • até 8 dispositivos Switch</summary><p>Crie os dispositivos no portal Sinric Pro e associe seus IDs abaixo.</p><div id="slots"></div><button type="button" id="addSlot">Adicionar dispositivo</button></details><button type="submit">Salvar e reiniciar ESP32</button></form></section>
-<section><h2>Sistema</h2><button id="readLogs">Ler logs</button><button id="restart">Reiniciar ESP32</button><button id="reset">Restaurar configuração de fábrica</button><pre id="logs"></pre></section></main>
-<script>
-'use strict';
-const $=id=>document.getElementById(id);let token='',cfg={},systems=[],slots=[],refreshTimer;
-const fields=[['Rede',[['ssid','SSID'],['wifi_password','Senha Wi-Fi','password'],['dhcp','Usar DHCP','checkbox'],['ip','IP estático'],['subnet','Máscara de sub-rede'],['gateway','Gateway'],['dns','DNS']]],['PC',[['pc_name','Nome do PC'],['mac','MAC Ethernet'],['wol_port','Porta WoL','number'],['wol_repeat','Repetições WoL','number'],['wol_interval_ms','Intervalo WoL (ms)','number']]],['Boot',[['default_target','Sistema padrão','target'],['fallback_boot_id','Fallback','target'],['pending_ttl_s','Validade da seleção (segundos)','number'],['physical_boot_behavior','Botão físico do PC','behavior']]],['Acesso',[['admin_token','Novo token administrativo (mínimo 24 caracteres)','password'],['agent_token','Novo token do agent (mínimo 24 caracteres)','password']]],['Sinric',[['sinric_enabled','Ativar Sinric','checkbox'],['sinric_app_key','App Key','password'],['sinric_app_secret','App Secret','password']]]];
-function message(s){$('message').textContent=s;}
-async function api(path,method='GET',data){const r=await fetch('/api/v1/'+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(data?{body:JSON.stringify(data)}:{})});const result=await r.json();if(!r.ok)throw Error(result.error||r.status);return result;}
-function choices(input,value,kind){const add=(v,t)=>{const o=document.createElement('option');o.value=v;o.textContent=t;input.append(o);};add('','Nenhum');if(kind==='behavior'){input.replaceChildren();add('default_target','Usar sistema padrão');add('last_selected','Usar última seleção');add('exit_to_firmware','Retornar ao firmware');}else{if(kind==='slot'){add('default','Padrão / seleção pendente');add('shutdown','Desligar PC (agent)');}for(const e of systems)if(!e.blocked)add(e.id,e.name+' • '+e.id);}input.value=value||'';}
-function renderFields(){ $('fields').replaceChildren();for(const [title,list]of fields){const details=document.createElement('details');details.open=true;const summary=document.createElement('summary');summary.textContent=title;details.append(summary);const grid=document.createElement('div');grid.className='grid';for(const [key,label,type='text']of list){const l=document.createElement('label');l.textContent=label;const input=document.createElement(type==='target'||type==='behavior'?'select':'input');input.id='f_'+key;if(input.tagName==='SELECT')choices(input,cfg[key],type);else{input.type=type;if(type==='checkbox')input.checked=!!cfg[key];else input.value=type==='password'?'':cfg[key]??'';}if(type==='password'){input.autocomplete='new-password';input.placeholder=cfg[key+'_set']?'Já configurado; vazio mantém valor':'Informe o valor';}l.append(input);grid.append(l);}details.append(grid);$('fields').append(details);}}
-function renderEntries(){ $('entries').replaceChildren();systems.forEach((e,i)=>{const row=document.createElement('div');row.className='entry';const name=document.createElement('strong');name.textContent=e.name+' • Boot'+e.id+(e.blocked?' • bloqueada':'');row.append(name);const label=document.createElement('label');label.className='check';const hide=document.createElement('input');hide.type='checkbox';hide.checked=!!e.hidden;hide.onchange=()=>{e.hidden=hide.checked;renderButtons();};label.append(hide,document.createTextNode('Ocultar'));row.append(label);const up=document.createElement('button');up.type='button';up.textContent='↑';up.disabled=i===0;up.onclick=()=>{[systems[i-1],systems[i]]=[systems[i],systems[i-1]];renderEntries();renderButtons();};row.append(up);$('entries').append(row);});}
-function renderSlots(){ $('slots').replaceChildren();slots.forEach((s,i)=>{const row=document.createElement('div');row.className='grid';const id=document.createElement('input');id.placeholder='Device ID';id.value=s.device_id;id.oninput=()=>s.device_id=id.value.trim();const target=document.createElement('select');choices(target,s.boot_id,'slot');target.onchange=()=>s.boot_id=target.value;const remove=document.createElement('button');remove.type='button';remove.textContent='Remover';remove.onclick=()=>{slots.splice(i,1);renderSlots();};row.append(id,target,remove);$('slots').append(row);});}
-function renderButtons(){ $('buttons').replaceChildren();for(const e of systems){if(e.blocked||(e.hidden&&!$('showHidden').checked))continue;const row=document.createElement('div');const boot=document.createElement('button');boot.textContent='Ligar • '+e.name;boot.onclick=()=>action(()=>api('boot','POST',{boot_id:e.id}));const force=document.createElement('button');force.textContent='Forçar WoL';force.onclick=()=>{if(confirm('Enviar WoL para '+e.name+' mesmo com o PC online? Isso não reinicia o PC.'))action(()=>api('boot','POST',{boot_id:e.id,force:true,confirm:'FORCE_BOOT'}));};const reboot=document.createElement('button');reboot.textContent='Reiniciar neste sistema';reboot.onclick=()=>{if(confirm('Reiniciar o PC agora em '+e.name+'? Salve seu trabalho antes.'))action(()=>api('reboot','POST',{boot_id:e.id,confirm:'REBOOT'}));};row.append(boot,force,reboot);$('buttons').append(row);}}
-async function action(fn){try{await fn();message('Solicitação aceita.');await status();}catch(e){message(e.message);}}
-async function status(){const s=await api('status');$('shutdown').disabled=!s.shutdown_enabled;$('online').textContent=s.online?'PC ONLINE':'PC OFFLINE';$('status').textContent=[s.os||'Sistema não identificado','ESP32 '+s.ip,'RSSI '+s.rssi+' dBm','Sinric '+(s.sinric_online?'online':'offline'),'Pendente '+(s.pending_target||'nenhum'),'Padrão '+(s.default_target||'nenhum'),s.version,'Heap '+s.heap+' bytes','Uptime '+s.uptime+' s'].join(' · ');$('setupInfo').textContent=s.config_locked?'Configuração preservada, mas incompatível ou corrompida. Use firmware compatível ou restauração explícita.':s.setup_mode?'Configure Wi-Fi, MAC e dois tokens diferentes para concluir.':'Campos de senha vazios mantêm os valores existentes.';}
-$('connect').onclick=async()=>{token=$('token').value.trim();try{cfg=await api('config');systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('app').hidden=false;renderFields();renderEntries();renderSlots();renderButtons();await status();clearInterval(refreshTimer);refreshTimer=setInterval(()=>status().catch(e=>message(e.message)),10000);message('Conectado.');}catch(e){message(e.message);}};
-$('settings').onsubmit=async e=>{e.preventDefault();const patch={};for(const [,list]of fields)for(const [key,,type='text']of list){const el=$('f_'+key);if(type==='password'&&!el.value)continue;patch[key]=type==='checkbox'?el.checked:type==='number'?Number(el.value):el.value;}patch.systems=systems;patch.sinric_slots=slots;try{await api('config','PUT',patch);clearInterval(refreshTimer);message('Salvo. ESP32 reiniciando. Reconecte pela rede configurada e use o token administrativo.');}catch(e){message(e.message);}};
-$('showHidden').onchange=renderButtons;$('addSlot').onclick=()=>{if(slots.length<8){slots.push({device_id:'',boot_id:'default'});renderSlots();}};
-$('shutdown').onclick=()=>{if(confirm('Desligar o PC? Salve seu trabalho antes.'))action(()=>api('shutdown','POST',{confirm:'SHUTDOWN'}));};
-$('rescan').onclick=()=>action(()=>api('discovery/request','POST',{}));$('readLogs').onclick=async()=>{try{$('logs').textContent=(await api('logs')).logs.join('\n');}catch(e){message(e.message);}};
-$('restart').onclick=()=>{if(confirm('Reiniciar ESP32?'))action(()=>api('system/reboot','POST',{}));};$('reset').onclick=()=>{if(prompt('Digite FACTORY_RESET para apagar a configuração')==='FACTORY_RESET')action(()=>api('system/reset','POST',{confirm:'FACTORY_RESET'}));};
-</script></html>
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#08111d">
+<title>Remote Boot</title>
+<style>{{APP_CSS}}</style>
+</head>
+<body>
+<svg class="svg-sprite" aria-hidden="true">
+  <symbol id="icon-logo" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8V2Z"/><path d="M11 1h2v11h-2z"/></symbol>
+  <symbol id="icon-overview" viewBox="0 0 24 24"><path d="M3 3h8v8H3zm10 0h8v5h-8zM3 13h8v8H3zm10-3h8v11h-8z"/></symbol>
+  <symbol id="icon-boot" viewBox="0 0 24 24"><path d="M12 2v10l4-4 1.4 1.4L12 14.8 6.6 9.4 8 8l4 4V2z"/><path d="M4 17h16v4H4z"/></symbol>
+  <symbol id="icon-settings" viewBox="0 0 24 24"><path d="m9.4 2-.5 2.1-1.5.9-2.1-.6-2 3.4 1.6 1.5v1.8L3.3 12.6l2 3.4 2.1-.6 1.5.9.5 2.1h4l.5-2.1 1.5-.9 2.1.6 2-3.4-1.6-1.5V9.3l1.6-1.5-2-3.4-2.1.6-1.5-.9L13.4 2h-4ZM11.4 7a3.2 3.2 0 1 1 0 6.4 3.2 3.2 0 0 1 0-6.4Z"/></symbol>
+  <symbol id="icon-cloud" viewBox="0 0 24 24"><path d="M7 18a5 5 0 0 1-.8-9.9A7 7 0 0 1 19.8 10 4 4 0 0 1 19 18H7Zm5-8-3 3h2v3h2v-3h2l-3-3Z"/></symbol>
+  <symbol id="icon-system" viewBox="0 0 24 24"><path d="M3 4h18v13H3V4Zm2 2v9h14V6H5Zm4 14h6v2H9v-2Z"/></symbol>
+  <symbol id="icon-monitor" viewBox="0 0 24 24"><path d="M2 3h20v14H2V3Zm2 2v10h16V5H4Zm5 14h6v2H9v-2Z"/></symbol>
+  <symbol id="icon-wifi" viewBox="0 0 24 24"><path d="M2.4 8.6a15 15 0 0 1 19.2 0l-1.3 1.5a13 13 0 0 0-16.6 0L2.4 8.6Zm3.3 3.7a10 10 0 0 1 12.6 0L17 13.8a8 8 0 0 0-10 0l-1.3-1.5ZM9 16a4.8 4.8 0 0 1 6 0l-3 3-3-3Z"/></symbol>
+  <symbol id="icon-power" viewBox="0 0 24 24"><path d="M11 2h2v10h-2V2Zm-3.5 3.2 1 1.7A7 7 0 1 0 15.5 7l1-1.7A9 9 0 1 1 7.5 5.2Z"/></symbol>
+  <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 6v6h-6l2.3-2.3A6 6 0 1 0 18 15h2.1A8 8 0 1 1 17.7 8L20 6Z"/></symbol>
+  <symbol id="icon-save" viewBox="0 0 24 24"><path d="M3 3h15l3 3v15H3V3Zm2 2v14h14V7l-2-2H5Zm2 0h8v5H7V5Zm1 9h8v5H8v-5Z"/></symbol>
+  <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></symbol>
+  <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M8 3h8l1 2h4v2H3V5h4l1-2Zm-2 6h12l-1 12H7L6 9Z"/></symbol>
+  <symbol id="icon-up" viewBox="0 0 24 24"><path d="m12 5 7 7-1.4 1.4-4.6-4.6V20h-2V8.8l-4.6 4.6L5 12l7-7Z"/></symbol>
+  <symbol id="icon-terminal" viewBox="0 0 24 24"><path d="M3 4h18v16H3V4Zm2 2v12h14V6H5Zm2 3 3 3-3 3-1.4-1.4 1.6-1.6-1.6-1.6L7 9Zm5 5h5v2h-5v-2Z"/></symbol>
+  <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm-1 6h2v7h-2V8Zm0 9h2v2h-2v-2Z"/></symbol>
+  <symbol id="icon-link" viewBox="0 0 24 24"><path d="M10.6 13.4a1 1 0 0 1 0-1.4l4-4a4 4 0 1 1 5.7 5.7l-2.6 2.6-1.4-1.4 2.6-2.6a2 2 0 1 0-2.8-2.8l-4 4a1 1 0 0 1-1.5-.1Zm2.8-2.8a1 1 0 0 1 0 1.4l-4 4a2 2 0 1 0 2.8 2.8l2.6-2.6 1.4 1.4-2.6 2.6a4 4 0 1 1-5.7-5.7l4-4a1 1 0 0 1 1.5.1Z"/></symbol>
+</svg>
+
+<div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+
+<section id="login" class="login-screen" aria-labelledby="login-title">
+  <div class="login-card">
+    <div class="brand-mark"><svg><use href="#icon-logo"/></svg></div>
+    <p class="eyebrow">ESP32 CONTROL CENTER</p>
+    <h1 id="login-title">Remote Boot</h1>
+    <p class="muted">Controle seguro de inicialização na sua rede local.</p>
+    <label class="field">
+      <span>Token administrativo</span>
+      <span class="input-wrap"><svg><use href="#icon-system"/></svg><input id="token" type="password" autocomplete="current-password" placeholder="Cole seu token"></span>
+    </label>
+    <button id="connect" class="button primary wide" type="button"><svg><use href="#icon-power"/></svg><span>Conectar</span></button>
+    <p class="login-help">No primeiro acesso, use a senha/token exibida no monitor serial.</p>
+    <p id="loginError" class="inline-alert" role="alert" hidden></p>
+  </div>
+</section>
+
+<div id="app" class="app-shell" hidden>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark small"><svg><use href="#icon-logo"/></svg></div>
+      <div><strong>Remote Boot</strong><small>ESP32 Control</small></div>
+    </div>
+    <nav class="navigation" aria-label="Navegação principal">
+      <button type="button" class="nav-item active" data-view="overview"><svg><use href="#icon-overview"/></svg><span>Visão geral</span></button>
+      <button type="button" class="nav-item" data-view="boot"><svg><use href="#icon-boot"/></svg><span>Boot</span></button>
+      <button type="button" class="nav-item" data-view="settings"><svg><use href="#icon-settings"/></svg><span>Configuração</span></button>
+      <button type="button" class="nav-item" data-view="sinric"><svg><use href="#icon-cloud"/></svg><span>Sinric</span></button>
+      <button type="button" class="nav-item" data-view="system"><svg><use href="#icon-system"/></svg><span>Sistema</span></button>
+    </nav>
+    <div class="sidebar-foot">
+      <span id="sideDot" class="status-dot"></span>
+      <span id="sideStatus">Atualizando...</span>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    <header class="topbar">
+      <div><p class="eyebrow">PAINEL DE CONTROLE</p><h1 id="pageTitle">Visão geral</h1></div>
+      <div class="top-status"><span id="topBadge" class="badge neutral">Carregando</span><button id="refreshStatus" class="icon-button" type="button" aria-label="Atualizar status"><svg><use href="#icon-refresh"/></svg></button></div>
+    </header>
+
+    <p id="message" class="sr-only" role="status" aria-live="polite"></p>
+
+    <section id="view-overview" class="view active" aria-labelledby="overview-title">
+      <div class="section-heading"><div><h2 id="overview-title">Estado do ambiente</h2><p>Informações em tempo real do computador e do ESP32.</p></div></div>
+      <div class="status-grid">
+        <article class="status-card"><div class="status-icon cyan"><svg><use href="#icon-monitor"/></svg></div><div><span>Computador</span><strong id="cardPc" class="skeleton">Carregando</strong><small id="cardOs">Sistema não identificado</small></div></article>
+        <article class="status-card"><div class="status-icon green"><svg><use href="#icon-system"/></svg></div><div><span>ESP32</span><strong id="cardEsp" class="skeleton">Carregando</strong><small id="cardVersion">Versão</small></div></article>
+        <article class="status-card"><div class="status-icon blue"><svg><use href="#icon-wifi"/></svg></div><div><span>Rede Wi-Fi</span><strong id="cardWifi" class="skeleton">Carregando</strong><small id="cardRssi">RSSI</small></div></article>
+        <article class="status-card"><div class="status-icon violet"><svg><use href="#icon-cloud"/></svg></div><div><span>Sinric Pro</span><strong id="cardSinric" class="skeleton">Carregando</strong><small id="cardPending">Nenhum boot pendente</small></div></article>
+        <article class="status-card"><div class="status-icon amber"><svg><use href="#icon-link"/></svg></div><div><span>Tailscale</span><strong id="cardTailscale" class="skeleton">Carregando</strong><small id="cardTailscaleDetail">Verificando MicroLink</small></div></article>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Inicialização rápida</h2><p>Escolha o próximo sistema sem sair desta tela.</p></div><button type="button" class="button ghost compact" data-view="boot">Ver todos</button></div>
+        <div id="overviewBoot" class="quick-boot"></div>
+      </div>
+    </section>
+
+    <section id="view-boot" class="view" aria-labelledby="boot-title" hidden>
+      <div class="section-heading"><div><h2 id="boot-title">Sistemas disponíveis</h2><p>O boot escolhido vale para a próxima inicialização.</p></div><label class="switch-row"><input type="checkbox" id="showHidden"><span>Mostrar ocultos</span></label></div>
+      <div id="buttons" class="boot-grid"></div>
+      <div class="panel action-panel">
+        <div><h3>Ações do computador</h3><p>Atualize o catálogo ou envie um desligamento pelo agent.</p></div>
+        <div class="button-row"><button id="rescan" class="button secondary" type="button"><svg><use href="#icon-refresh"/></svg><span>Atualizar catálogo</span></button><button id="shutdown" class="button danger-soft" type="button" disabled><svg><use href="#icon-power"/></svg><span>Desligar PC</span></button></div>
+      </div>
+    </section>
+
+    <form id="settings" novalidate>
+      <section id="view-settings" class="view" aria-labelledby="settings-title" hidden>
+        <div class="section-heading"><div><h2 id="settings-title">Configuração</h2><p id="setupInfo">Carregando configuração...</p></div><button type="submit" class="button primary save-button"><svg><use href="#icon-save"/></svg><span>Salvar alterações</span></button></div>
+        <div id="fields" class="settings-stack"></div>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Sistemas e exibição</h2><p>Oculte ou altere a prioridade visual sem modificar o BootOrder.</p></div></div>
+          <div id="entries" class="entry-list"></div>
+        </div>
+      </section>
+
+      <section id="view-sinric" class="view" aria-labelledby="sinric-title" hidden>
+        <div class="section-heading"><div><h2 id="sinric-title">Sinric Pro</h2><p>Controle o boot e desligamento por Alexa ou Google Home.</p></div><button type="submit" class="button primary save-button"><svg><use href="#icon-save"/></svg><span>Salvar Sinric</span></button></div>
+        <div class="panel sinric-main">
+          <label class="toggle-card"><span><strong>Ativar integração</strong><small>Conectar este ESP32 ao Sinric Pro</small></span><input type="checkbox" id="f_sinric_enabled" role="switch"></label>
+          <div id="sinricCredentials" class="form-grid two">
+            <label class="field" id="wrap_sinric_app_key"><span>App Key</span><input id="f_sinric_app_key" type="password" autocomplete="new-password" placeholder="Informe a App Key"><small id="hint_sinric_app_key" class="field-hint"></small><small class="field-error" data-error-for="sinric_app_key"></small></label>
+            <label class="field" id="wrap_sinric_app_secret"><span>App Secret</span><input id="f_sinric_app_secret" type="password" autocomplete="new-password" placeholder="Informe o App Secret"><small id="hint_sinric_app_secret" class="field-hint"></small><small class="field-error" data-error-for="sinric_app_secret"></small></label>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Dispositivos Switch</h2><p>Até 8 dispositivos vinculados a sistemas ou desligamento.</p></div><button type="button" id="addSlot" class="button secondary compact"><svg><use href="#icon-plus"/></svg><span>Adicionar</span></button></div>
+          <div id="slots" class="slot-list"></div>
+          <p id="slotWarning" class="inline-notice" hidden><svg><use href="#icon-alert"/></svg><span>Sinric está ativo, mas nenhum dispositivo foi adicionado.</span></p>
+        </div>
+      </section>
+    </form>
+
+    <section id="view-system" class="view" aria-labelledby="system-title" hidden>
+      <div class="section-heading"><div><h2 id="system-title">Sistema</h2><p>Diagnóstico, manutenção e ações administrativas.</p></div></div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Logs do dispositivo</h2><p>Os últimos eventos são mantidos apenas na memória.</p></div><button id="readLogs" class="button secondary compact" type="button"><svg><use href="#icon-terminal"/></svg><span>Ler logs</span></button></div>
+        <pre id="logs" class="log-view">Clique em “Ler logs” para carregar.</pre>
+      </div>
+      <div class="panel danger-zone">
+        <div><h2>Zona de manutenção</h2><p>Estas ações interrompem o funcionamento temporariamente.</p></div>
+        <div class="button-row"><button id="restart" class="button secondary" type="button"><svg><use href="#icon-refresh"/></svg><span>Reiniciar ESP32</span></button><button id="reset" class="button danger" type="button"><svg><use href="#icon-trash"/></svg><span>Restaurar fábrica</span></button></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toastStatus" class="toast-stack" role="status" aria-live="polite"></div>
+<div id="toastAlert" class="toast-stack alert-stack" role="alert" aria-live="assertive"></div>
+<script>{{APP_JS}}</script>
+</body>
+</html>

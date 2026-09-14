@@ -8,20 +8,24 @@
 #include <WebSocketsServer.h>
 #include <SinricPro.h>
 #include <SinricProSwitch.h>
+#include "sinricpro_interface_compat.hpp"
 #include "boot_state.hpp"
 #include "power_command.hpp"
 #include "config_policy.hpp"
 #include "setup_network_policy.hpp"
+#include "sinric_policy.hpp"
+#include "microlink_runtime.hpp"
 #include "local_wifi.h"
 #include "web_asset.h"
 
-constexpr char Version[]="2.1.2-experimental";
+constexpr char Version[]="2.2.0-microlink-poc";
 WebServer server(80); DNSServer dns; WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
 bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
 String setupKey,osName,hostName,logs[32],agentSession;
 rb::PowerCommand powerCommand;
 rb::SetupNetworkPolicy setupNetwork;
+rb::MicrolinkRuntime microlink;
 uint32_t logIndex=0,restartAt=0,lastWol=0,wolAt=0;
 uint8_t wolRemaining=0; bool wolSent=false;
 String slotIds[8]; uint32_t slotReset[8]{};
@@ -99,7 +103,7 @@ bool validate(JsonDocument& d) {
         String target=slots[i]["boot_id"]|"";
         if(target!="default"&&target!="shutdown"&&!exists(idValue(slots[i]["boot_id"]))) return false;
     }
-    if(d["sinric_enabled"].as<bool>() && (strlen(d["sinric_app_key"]|"")<10 || strlen(d["sinric_app_secret"]|"")<10)) return false;
+    if(rb::sinricReadiness(d["sinric_enabled"].as<bool>(),d["sinric_app_key"]|"",d["sinric_app_secret"]|"")==rb::SinricReadiness::MissingCredentials) return false;
     return true;
 }
 void reloadState() {
@@ -170,6 +174,10 @@ void routes() {
         d["shutdown_enabled"]=agentShutdownEnabled && agentSession.length()>=16 && state.online(millis());
         d["pending_target"]=idText(state.pendingValid(millis())?state.pending:-1); d["default_target"]=idText(state.defaultTarget);
         d["last_selected_target"]=idText(state.lastSelected); d["pending_created_at_ms"]=state.created; d["pending_ttl_s"]=state.ttl/1000;
+        const rb::MicrolinkSnapshot tail=microlink.snapshot(); JsonObject tailscale=d["tailscale"].to<JsonObject>();
+        tailscale["built"]=tail.built; tailscale["configured"]=tail.configured; tailscale["connected"]=tail.connected;
+        tailscale["state"]=tail.state; tailscale["ip"]=tail.ip; tailscale["peers"]=tail.peers;
+        tailscale["heap_free"]=tail.heapFree; tailscale["heap_minimum"]=tail.heapMinimum; tailscale["largest_block"]=tail.largestBlock;
         jsonReply(200,d);
     });
     server.on("/api/v1/config",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; rb::redactConfig(config,d);
@@ -179,6 +187,7 @@ void routes() {
         JsonDocument patch,next; if(!body(patch)) return; next.set(config);
         const char* allowed="|ssid|wifi_password|admin_token|agent_token|pc_name|mac|dhcp|ip|subnet|gateway|dns|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|sinric_enabled|sinric_app_key|sinric_app_secret|sinric_slots|systems|";
         for(JsonPair p:patch.as<JsonObject>()) { if(!strstr(allowed,(String("|")+p.key().c_str()+"|").c_str())) { errorReply(400,"UNKNOWN_FIELD"); return; } next[p.key()]=p.value(); }
+        if(rb::sinricReadiness(next["sinric_enabled"].as<bool>(),next["sinric_app_key"]|"",next["sinric_app_secret"]|"")==rb::SinricReadiness::MissingCredentials) { errorReply(400,"SINRIC_CREDENTIALS_REQUIRED"); return; }
         if(!validate(next)) { errorReply(400,"INVALID_CONFIG"); return; }
         if(!persist(next)) { errorReply(500,"NVS_WRITE_FAILED"); return; }
         config.set(next); reloadState(); JsonDocument d; d["saved"]=true; d["restarting"]=true; jsonReply(200,d); restartAt=millis()+1500;
@@ -308,7 +317,10 @@ void agentSocketTick() {
     }
 }
 void startSinric() {
-    if(!config["sinric_enabled"].as<bool>()||setupMode||locked) return;
+    if(setupMode||locked) return;
+    rb::SinricReadiness readiness=rb::sinricReadiness(config["sinric_enabled"].as<bool>(),config["sinric_app_key"]|"",config["sinric_app_secret"]|"");
+    if(readiness==rb::SinricReadiness::Disabled) return;
+    if(readiness==rb::SinricReadiness::MissingCredentials) { logEvent("SINRIC_CONFIG_INCOMPLETE"); return; }
     size_t i=0;
     for(JsonObject slot:config["sinric_slots"].as<JsonArray>()) {
         slotIds[i]=slot["device_id"].as<String>(); size_t index=i++;
@@ -354,12 +366,11 @@ void setup() {
         } else Serial.println("Local Wi-Fi connection failed; starting recovery AP.");
     }
     if(WiFi.status()!=WL_CONNECTED) setupAP();
-    routes(); startAgentSocket(); startSinric(); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
+    routes(); startAgentSocket(); startSinric(); microlink.begin(locked,setupMode,WiFi.status()==WL_CONNECTED); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
 }
 void loop() {
-    server.handleClient(); agentSocketTick(); if(setupNetwork.shouldProcessDns()) dns.processNextRequest(); wolTick();
+    server.handleClient(); agentSocketTick(); if(setupNetwork.shouldProcessDns()) dns.processNextRequest(); wolTick(); microlink.tick(WiFi.status()==WL_CONNECTED);
     if(sinricStarted) { SinricPro.handle(); for(int i=0;i<8;++i) if(slotReset[i]&&static_cast<int32_t>(millis()-slotReset[i])>=0) { SinricProSwitch& d=SinricPro[slotIds[i]]; d.sendPowerStateEvent(false); slotReset[i]=0; } }
     if(setupNetwork.shouldStartRecoveryAp(WiFi.status()==WL_CONNECTED,millis())) setupAP();
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);
 }
-

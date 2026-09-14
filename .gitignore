@@ -1,4 +1,5 @@
 .pio/
+.worktrees/
 .cache/
 build/
 dist/
@@ -12,8 +13,16 @@ __pycache__/
 agent.json
 config.local.*
 firmware/include/local_wifi.generated.h
+firmware/include/microlink_config.generated.h
 .env*
 firmware/include/web_asset.h
+
+# PlatformIO Arduino-as-component / ESP-IDF generated files
+/CMakeLists.txt
+/firmware/src/CMakeLists.txt
+/dependencies.lock
+/managed_components/
+/sdkconfig.esp32c3_*
 
 # Native agent build outputs
 **/bin/

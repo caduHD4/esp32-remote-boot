@@ -9,6 +9,8 @@
 | SCHEMA_LOCKED | Flash preservada; volte para versão compatível ou restaure explicitamente. Não há apagamento automático. |
 | 401/403 | Token admin/agent correto, 24–128 caracteres permitidos; confira qual permissão a rota aceita. |
 | INVALID_CONFIG | Confira MAC unicast, limites WoL/TTL, IDs existentes e tokens diferentes. Nomes até 63 bytes UTF-8. |
+| SINRIC_CREDENTIALS_REQUIRED | Sinric foi ativado sem App Key/App Secret armazenados ou novos com pelo menos 10 caracteres. A dashboard 2.1.3 destaca os campos antes de enviar. |
+| SINRIC_CONFIG_INCOMPLETE nos logs | A proteção de inicialização impediu o SDK Sinric de iniciar com credenciais ausentes. Complete as credenciais ou desative a integração. O evento é registrado uma vez, sem loop de conexão. |
 | CATALOG_LIMIT | Mais de 24 entradas; remova entradas obsoletas com cuidado no host. Não ocorre truncamento silencioso. |
 | PC parece online incorretamente | Status representa heartbeat recebido. Confira que só o PC correto usa o token do agent. |
 | PC não liga | Fonte independente ESP32, NIC Ethernet com energia, WoL no último OS desligado, ErP, Fast Startup, broadcast/isolamento do AP. |
