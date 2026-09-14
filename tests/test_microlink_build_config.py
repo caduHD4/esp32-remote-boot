@@ -53,3 +53,8 @@ assert "pipx install --force platformio==6.1.19" in readme
 assert "pipx install --force platformio==6.1.19" in microlink_guide
 assert "6.1.19 ou mais recente" not in readme
 assert "6.1.19 ou mais recente" not in microlink_guide
+
+for workflow_name in ("ci.yml", "release.yml"):
+    workflow = (root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+    assert "pip install platformio==6.1.19" in workflow
+    assert "pip install platformio==6.1.18" not in workflow

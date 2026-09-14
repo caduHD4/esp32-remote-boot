@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: sudo apt-get update && sudo apt-get install -y gnu-efi liblzma-dev shellcheck jq
-      - run: pip install platformio==6.1.18
+      - run: pip install platformio==6.1.19
       - run: bash tests/run.sh
       - run: find agent installer ipxe scripts tests -name '*.sh' -print0 | xargs -0 shellcheck -x
       - run: pio run -e esp32c3_4mb
