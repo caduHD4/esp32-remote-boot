@@ -13,7 +13,7 @@ for landmark in ("<header", "<nav", "<main", "<aside"):
 for view in ("overview", "boot", "settings", "sinric", "system"):
     assert f'id="view-{view}"' in html
     assert f'data-view="{view}"' in html
-for token in ('<symbol id="icon-', 'role="status"', 'role="alert"', 'aria-live="polite"'):
+for token in ('<symbol id="icon-', 'role="status"', 'role="alert"', 'aria-live="polite"', 'id="setupWizard"', 'id="setupContent"'):
     assert token in html, token
 
 for rule in (

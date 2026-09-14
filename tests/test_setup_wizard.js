@@ -1,0 +1,17 @@
+'use strict';
+const assert=require('node:assert/strict');
+require('../firmware/web/app.js');
+const {validSetupPassword,setupProgressIndex}=globalThis.RemoteBootValidation;
+assert.equal(validSetupPassword('1'),true);
+assert.equal(validSetupPassword('12345678'),true);
+assert.equal(validSetupPassword('a b!@#$%'),true);
+assert.equal(validSetupPassword(''),false);
+assert.equal(validSetupPassword('123456789'),false);
+assert.equal(validSetupPassword('',true),true);
+assert.equal(setupProgressIndex('password'),0);
+assert.equal(setupProgressIndex('computer'),1);
+assert.equal(setupProgressIndex('boot'),2);
+assert.equal(setupProgressIndex('integrations'),3);
+assert.equal(setupProgressIndex('finish'),4);
+assert.equal(setupProgressIndex('complete'),5);
+console.log('PASS: dashboard guided setup policy');

@@ -46,7 +46,9 @@ function createStatusPoller({poll,isHidden}){
   return {tick,visibilityChanged:()=>{if(!isHidden())tick()}}
 }
 function statusControls(state){return {shutdownDisabled:!state.shutdown_enabled}}
-globalThis.RemoteBootValidation={validateSinric,formatTailscaleStatus,createStatusPoller,statusControls};
+function validSetupPassword(value,optional=false){const length=String(value??'').length;return optional?length<=8:length>=1&&length<=8}
+function setupProgressIndex(step){return {password:0,computer:1,boot:2,integrations:3,finish:4,complete:5}[step]??0}
+globalThis.RemoteBootValidation={validateSinric,formatTailscaleStatus,createStatusPoller,statusControls,validSetupPassword,setupProgressIndex};
 if(typeof document!=='undefined'){
 const $=id=>document.getElementById(id);
 let token='',cfg={},systems=[],slots=[],refreshTimer,statusPoller,statusRequest;
@@ -77,6 +79,68 @@ async function api(path,method='GET',data){
     let result={};try{result=await response.json()}catch(_){if(!response.ok)throw Error('Resposta inválida do ESP32 ('+response.status+').');throw Error('Não foi possível acessar o ESP32. Verifique a rede.')}
     if(!response.ok)throw Error(apiError(result.error||String(response.status)));return result
   }finally{clearTimeout(timeout)}
+}
+async function setupRequest(path,method='GET',data){
+  const options={method,headers:{'Content-Type':'application/json'}};
+  if(data)options.body=JSON.stringify(data);
+  const response=await fetch('/api/v1/setup/'+path,options);
+  let result={};try{result=await response.json()}catch(_){throw Error('Resposta inválida do ESP32.')}
+  if(!response.ok)throw Error(apiError(result.error||String(response.status)));
+  return result
+}
+function setupSession(value){
+  try{if(value===undefined)return sessionStorage.getItem('remoteBootSetupPassword')||'';sessionStorage.setItem('remoteBootSetupPassword',value)}catch(_){return ''}
+  return value
+}
+function setupFailure(error){$('setupError').textContent=error.message;$('setupError').hidden=false}
+function setupTemplate(content){$('setupContent').innerHTML=content;$('setupError').hidden=true}
+function updateSetupProgress(step){
+  const current=setupProgressIndex(step);
+  document.querySelectorAll('[data-setup-progress]').forEach((item,index)=>{item.classList.toggle('active',index===current);item.classList.toggle('done',index<current)})
+}
+async function waitForSetup(){
+  for(let attempt=0;attempt<12;++attempt){
+    await new Promise(resolve=>setTimeout(resolve,1000));
+    try{return await setupRequest('state')}catch(_){}
+  }
+  throw Error('O ESP32 ainda não voltou. Atualize a página em alguns segundos.')
+}
+async function renderSetup(state){
+  $('login').hidden=true;$('app').hidden=true;$('setupWizard').hidden=false;updateSetupProgress(state.step);
+  if(state.step!=='password'&&!token)token=setupSession();
+  if(state.step!=='password'&&!token){
+    setupTemplate('<p class="setup-copy">Digite a senha criada para continuar a configuração.</p><form id="setupContinue" class="setup-form"><label class="field"><span>Senha administrativa</span><input id="setupContinuePassword" type="password" maxlength="8" autocomplete="current-password" required></label><button class="button primary wide" type="submit"><span>Continuar</span></button></form>');
+    $('setupContinue').onsubmit=async event=>{event.preventDefault();token=$('setupContinuePassword').value;try{await api('config');setupSession(token);renderSetup(state)}catch(error){token='';setupFailure(error)}};return
+  }
+  if(state.step==='password'){
+    setupTemplate('<p class="setup-copy">Crie a senha usada para entrar na dashboard. Ela pode ter de 1 a 8 caracteres, sem exigência de composição.</p><form id="setupPasswordForm" class="setup-form"><label class="field"><span>Nova senha</span><input id="setupPassword" type="password" maxlength="8" autocomplete="new-password" required></label><label class="field"><span>Confirmar senha</span><input id="setupPasswordConfirm" type="password" maxlength="8" autocomplete="new-password" required></label><button class="button primary wide" type="submit"><span>Salvar e reiniciar</span></button></form>');
+    $('setupPasswordForm').onsubmit=async event=>{event.preventDefault();const password=$('setupPassword').value;if(!validSetupPassword(password)){setupFailure(Error('Use uma senha de 1 a 8 caracteres.'));return}if(password!==$('setupPasswordConfirm').value){setupFailure(Error('As senhas não coincidem.'));return}const button=event.submitter;setBusy(button,true,'Salvando');try{await setupRequest('password','POST',{password});token=password;setupSession(password);setupTemplate('<p class="setup-copy">Senha salva. Reiniciando o ESP32…</p>');renderSetup(await waitForSetup())}catch(error){setupFailure(error)}finally{setBusy(button,false)}};return
+  }
+  if(state.step==='computer'){
+    setupTemplate('<p class="setup-copy">Nenhum computador está configurado. Cadastre o primeiro para habilitar o Wake-on-LAN.</p><form id="setupComputerForm" class="setup-form"><label class="field"><span>Nome do computador</span><input id="setupPcName" maxlength="63" value="Desktop" required></label><label class="field"><span>MAC Ethernet</span><input id="setupMac" placeholder="02:00:00:00:00:01" autocomplete="off" required></label><label class="field"><span>Senha do agent (opcional)</span><input id="setupAgentPassword" type="password" maxlength="8" autocomplete="new-password"><small class="field-hint">Deixe vazia se quiser somente ligar o PC.</small></label><div class="form-grid two"><label class="field"><span>Porta WoL</span><input id="setupWolPort" type="number" min="1" max="65535" value="9"></label><label class="field"><span>Repetições WoL</span><input id="setupWolRepeat" type="number" min="1" max="10" value="3"></label></div><button class="button primary wide" type="submit"><span>Salvar computador</span></button></form>');
+    $('setupComputerForm').onsubmit=async event=>{event.preventDefault();const agent_password=$('setupAgentPassword').value;if(!validSetupPassword(agent_password,true)){setupFailure(Error('A senha do agent deve ter no máximo 8 caracteres.'));return}const button=event.submitter;setBusy(button,true,'Salvando');try{await api('setup/computer','POST',{name:$('setupPcName').value,mac:$('setupMac').value,agent_password,wol_port:Number($('setupWolPort').value),wol_repeat:Number($('setupWolRepeat').value)});renderSetup(await setupRequest('state'))}catch(error){setupFailure(error)}finally{setBusy(button,false)}};return
+  }
+  if(state.step==='boot'){
+    let catalog=[];try{catalog=(await api('systems')).systems||[]}catch(error){setupFailure(error)}
+    const options='<option value="">Nenhum</option>'+catalog.filter(item=>!item.blocked).map(item=>'<option value="'+item.id+'">'+item.name.replace(/[&<>"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[char]))+'</option>').join('');
+    setupTemplate('<p class="setup-copy">O agent foi configurado. Escolha o comportamento de boot; se o catálogo ainda não chegou, você pode continuar e ajustar depois.</p><form id="setupBootForm" class="setup-form"><label class="field"><span>Sistema padrão</span><select id="setupDefault">'+options+'</select></label><label class="field"><span>Fallback</span><select id="setupFallback">'+options+'</select></label><label class="field"><span>Botão físico</span><select id="setupBehavior"><option value="exit_to_firmware">Seguir firmware/BootOrder</option><option value="default_target">Sistema padrão</option><option value="last_selected">Último selecionado</option></select></label><label class="field"><span>Validade da seleção (s)</span><input id="setupTtl" type="number" min="30" max="3600" value="180"></label><button class="button primary wide" type="submit"><span>Continuar</span></button></form>');
+    $('setupBootForm').onsubmit=async event=>{event.preventDefault();const button=event.submitter;setBusy(button,true,'Salvando');try{await api('setup/boot','POST',{default_target:$('setupDefault').value,fallback_boot_id:$('setupFallback').value,physical_boot_behavior:$('setupBehavior').value,pending_ttl_s:Number($('setupTtl').value)});renderSetup(await setupRequest('state'))}catch(error){setupFailure(error)}finally{setBusy(button,false)}};return
+  }
+  if(state.step==='integrations'){
+    let setupConfig={computers:[]};try{setupConfig=await api('config')}catch(error){setupFailure(error)}
+    setupTemplate('<p class="setup-copy">Integrações são opcionais. Deixe desativado para configurar depois.</p><form id="setupIntegrationsForm" class="setup-form"><label class="setup-check"><input id="setupSinricEnabled" type="checkbox"> Ativar Sinric Pro</label><div id="setupSinricFields" hidden><label class="field"><span>Sinric App Key</span><input id="setupSinricKey" type="password"></label><label class="field"><span>Sinric App Secret</span><input id="setupSinricSecret" type="password"></label><label class="field"><span>Device ID inicial (opcional)</span><input id="setupSinricDevice" maxlength="24"></label></div>'+(state.tailscale_available?'<label class="setup-check"><input id="setupTailscaleEnabled" type="checkbox"> Configurar Tailscale</label><div id="setupTailscaleFields" hidden><label class="field"><span>Tailscale Auth Key</span><input id="setupTailscaleKey" type="password" placeholder="tskey-auth-…"></label><label class="field"><span>Nome do dispositivo</span><input id="setupTailscaleName" value="remote-boot-esp32"></label></div>':'<p class="setup-note">Tailscale não está disponível neste firmware. Grave a variante MicroLink para habilitá-lo.</p>')+'<button class="button primary wide" type="submit"><span>Salvar integrações</span></button></form>');
+    $('setupSinricEnabled').onchange=()=>{$('setupSinricFields').hidden=!$('setupSinricEnabled').checked};
+    if($('setupTailscaleEnabled'))$('setupTailscaleEnabled').onchange=()=>{$('setupTailscaleFields').hidden=!$('setupTailscaleEnabled').checked};
+    $('setupIntegrationsForm').onsubmit=async event=>{event.preventDefault();const sinric_enabled=$('setupSinricEnabled').checked;const device=$('setupSinricDevice').value.trim();const computerId=setupConfig.computers?.[0]?.id||'';const payload={sinric_enabled,sinric_app_key:$('setupSinricKey').value,sinric_app_secret:$('setupSinricSecret').value,sinric_slots:device?[{device_id:device,computer_id:computerId,action:'wake',boot_id:''}]:[],tailscale_auth_key:$('setupTailscaleEnabled')&&$('setupTailscaleEnabled').checked?$('setupTailscaleKey').value:'',tailscale_device_name:$('setupTailscaleName')?.value||'remote-boot-esp32'};const button=event.submitter;setBusy(button,true,'Salvando');try{await api('setup/integrations','POST',payload);renderSetup(await setupRequest('state'))}catch(error){setupFailure(error)}finally{setBusy(button,false)}};return
+  }
+  if(state.step==='finish'){
+    setupTemplate('<p class="setup-copy">Configuração inicial concluída. O ESP32 será reiniciado e abrirá a dashboard normal.</p><button id="setupFinish" class="button primary wide" type="button"><span>Finalizar configuração</span></button>');
+    $('setupFinish').onclick=async event=>{const button=event.currentTarget;setBusy(button,true,'Finalizando');try{await api('setup/finish','POST',{});setupTemplate('<p class="setup-copy">Reiniciando o ESP32…</p>');const next=await waitForSetup();if(next.setup_complete){$('setupWizard').hidden=true;$('login').hidden=false;$('token').value=token;connect()}else renderSetup(next)}catch(error){setupFailure(error)}finally{setBusy(button,false)}};return
+  }
+}
+async function initialize(){
+  try{const state=await setupRequest('state');if(!state.setup_complete){renderSetup(state);return}}catch(_){}
+  $('setupWizard').hidden=true;$('login').hidden=false
 }
 function setBusy(button,busy,label){
   if(!button)return;
@@ -195,7 +259,7 @@ function status(){
   return statusRequest
 }
 async function connect(){
-  token=$('token').value.trim();$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
+  token=$('token').value;$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
   try{
     const initial=await api('bootstrap');cfg=initial.config;systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();applyStatus(initial.status);clearInterval(refreshTimer);statusPoller=createStatusPoller({poll:()=>status().catch(error=>showToast(error.message,true)),isHidden:()=>document.hidden});refreshTimer=setInterval(statusPoller.tick,10000);showToast('Dashboard conectada.')
   }catch(error){$('loginError').textContent=error.message;$('loginError').hidden=false}
@@ -217,6 +281,7 @@ function collectPatch(validatedSlots=slots){
   patch.sinric_enabled=$('f_sinric_enabled').checked;if($('f_sinric_app_key').value)patch.sinric_app_key=$('f_sinric_app_key').value;if($('f_sinric_app_secret').value)patch.sinric_app_secret=$('f_sinric_app_secret').value;
   patch.systems=systems;patch.sinric_slots=validatedSlots;return patch
 }
+initialize();
 $('connect').onclick=connect;$('token').addEventListener('keydown',event=>{if(event.key==='Enter')connect()});
 document.addEventListener('visibilitychange',()=>statusPoller?.visibilityChanged());
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>setActiveView(button.dataset.view)));

@@ -30,7 +30,22 @@
 
 <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
 
-<section id="login" class="login-screen" aria-labelledby="login-title">
+<section id="setupWizard" class="login-screen setup-screen" aria-labelledby="setup-title" hidden>
+  <div class="login-card setup-card">
+    <div class="brand-mark"><svg><use href="#icon-logo"/></svg></div>
+    <p class="eyebrow">CONFIGURAÇÃO INICIAL</p>
+    <h1 id="setup-title">Preparar Remote Boot</h1>
+    <div class="setup-progress" aria-label="Progresso">
+      <span data-setup-progress="password">1</span><span data-setup-progress="computer">2</span>
+      <span data-setup-progress="boot">3</span><span data-setup-progress="integrations">4</span>
+      <span data-setup-progress="finish">5</span>
+    </div>
+    <div id="setupContent"></div>
+    <p id="setupError" class="inline-alert" role="alert" hidden></p>
+  </div>
+</section>
+
+<section id="login" class="login-screen" hidden aria-labelledby="login-title">
   <div class="login-card">
     <div class="brand-mark"><svg><use href="#icon-logo"/></svg></div>
     <p class="eyebrow">ESP32 CONTROL CENTER</p>
