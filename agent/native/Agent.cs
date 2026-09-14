@@ -13,6 +13,16 @@ using System.Threading.Tasks;
 namespace RemoteBoot {
 public sealed class Config {
     public Uri Url;public string Token;public bool AllowShutdown,AllowReboot;public int WsPort=81;
+    public static bool ValidToken(string token) {
+        if(string.IsNullOrEmpty(token))return false;
+        if(token.Length<=8) {
+            foreach(char ch in token)if(char.IsControl(ch))return false;
+            return true;
+        }
+        if(token.Length<24||token.Length>128)return false;
+        foreach(char ch in token)if(!char.IsAsciiLetterOrDigit(ch)&&ch!='_'&&ch!='-')return false;
+        return true;
+    }
     public static Config Read(string path) {
         if(new FileInfo(path).Length>16384)throw new Exception("Configuration too large");
         using var doc=JsonDocument.Parse(File.ReadAllText(path));var d=doc.RootElement;
@@ -21,8 +31,7 @@ public sealed class Config {
         if(d.TryGetProperty("ws_port",out var port))c.WsPort=port.GetInt32();
         if(c.Url.Scheme!="http"||!IPAddress.TryParse(c.Url.Host,out var ip)||ip.AddressFamily!=System.Net.Sockets.AddressFamily.InterNetwork||
            c.Url.AbsolutePath!="/"||c.Url.Query!=""||c.Url.UserInfo!=""||c.WsPort<1||c.WsPort>65535||
-           c.Token==null||c.Token.Length<24||c.Token.Length>128)throw new Exception("Invalid configuration");
-        foreach(char ch in c.Token)if(!char.IsAsciiLetterOrDigit(ch)&&ch!='_'&&ch!='-')throw new Exception("Invalid token format");
+           !ValidToken(c.Token))throw new Exception("Invalid configuration");
         return c;
     }
 }

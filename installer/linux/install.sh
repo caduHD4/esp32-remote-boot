@@ -10,7 +10,7 @@ source "$root/installer/linux/efi_helpers.sh"
 rb_require efibootmgr findmnt lsblk jq curl make gcc objcopy git sha256sum
 read -r -p 'ESP32 IPv4 address: ' esp
 RB_URL="http://$esp"
-read -r -s -p 'Administrative token (24+ letters/digits/_/-): ' RB_TOKEN; printf '\n'
+read -r -s -p 'Administrative password: ' RB_TOKEN; printf '\n'
 rb_api GET status >/dev/null
 catalog=$(rb_catalog); jq . <<< "$catalog"
 if (( $(jq '.systems|length' <<< "$catalog")>24 )); then echo 'More than 24 entries. Reduce firmware entries before installing.' >&2; exit 1; fi

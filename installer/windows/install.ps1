@@ -6,7 +6,7 @@ $root=Split-Path (Split-Path $PSScriptRoot)
 $address=$null
 if(-not [Net.IPAddress]::TryParse($EspAddress,[ref]$address) -or $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork){throw 'Expected IPv4'}
 $script:RBUrl="http://$EspAddress"
-$secret=Read-Host 'Administrative token' -AsSecureString
+$secret=Read-Host 'Administrative password' -AsSecureString
 $script:RBToken=[Net.NetworkCredential]::new('',$secret).Password
 Invoke-RemoteBootApi GET status|Out-Null
 $catalog=Get-BootCatalog -FullScan:$FullScan

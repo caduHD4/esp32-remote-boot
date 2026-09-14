@@ -83,6 +83,13 @@ public static class SelfTest {
     public static int Run() {
         string directory=Path.Combine(Path.GetTempPath(),"remote-boot-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
         try {
+            Assert(Config.ValidToken("a"));
+            Assert(Config.ValidToken("a b!@#$%"));
+            Assert(Config.ValidToken(new string('x',24)));
+            Assert(!Config.ValidToken(""));
+            Assert(!Config.ValidToken("123456789"));
+            Assert(!Config.ValidToken(new string('x',23)));
+            Assert(!Config.ValidToken(new string('x',129)));
             string path=Path.Combine(directory,"ack");var host=new FakeHost();var config=new Config{AllowShutdown=true,AllowReboot=true};
             var gate=new CommandGate(host,config,path,"session-one");string id=new string('a',32);
             using var wrong=Message("command",id,"wrong");Assert(gate.Accept(wrong.RootElement)=="");
