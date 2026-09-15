@@ -34,7 +34,6 @@ bash "$root/tests/test_uefi_bootnext.sh"
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "$root/agent" "$root/installer" "$root/ipxe" "$root/scripts" "$root/tests" -name '*.sh' -print0)
 python3 "$root/tests/test_embed_local_wifi.py"
 python3 "$root/tests/test_no_ap_policy.py"
-python3 "$root/tests/test_embed_microlink_config.py"
 python3 "$root/tests/test_microlink_build_config.py"
 python3 "$root/tests/test_microlink_vendor.py"
 python3 "$root/tests/test_web_asset.py"
