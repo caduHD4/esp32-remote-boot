@@ -18,7 +18,7 @@
 #include "local_wifi.h"
 #include "web_asset.h"
 
-constexpr char Version[]="2.2.1-cloud-stability";
+constexpr char Version[]="2.2.2-no-ap-reliable-wifi";
 WebServer server(80); WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
 bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
@@ -75,8 +75,8 @@ bool parseMac(const char* text,uint8_t* mac) {
 bool validate(JsonDocument& d) {
     uint8_t mac[6];
     if(d["config_version"].as<int>()!=2 || !d["ssid"].is<const char*>() || strlen(d["ssid"].as<const char*>())<1 || strlen(d["ssid"].as<const char*>())>32 || !parseMac(d["mac"],mac)) return false;
-    for(const char* key:{"admin_token","agent_token"}) if(!rb::validCredential(d[key])) return false;
-    if(!rb::credentialsDistinct(d["admin_token"],d["agent_token"])) return false;
+    for(const char* key:{"admin_token","agent_token"}) if(!rb::validCredential(d[key].as<const char*>())) return false;
+    if(!rb::credentialsDistinct(d["admin_token"].as<const char*>(),d["agent_token"].as<const char*>())) return false;
     for(const char* key:{"wifi_password","pc_name","sinric_app_key","sinric_app_secret"}) if(d[key].is<const char*>()&&strlen(d[key])>128) return false;
     int port=d["wol_port"],repeat=d["wol_repeat"],interval=d["wol_interval_ms"],ttl=d["pending_ttl_s"];
     if(port<1||port>65535||repeat<1||repeat>10||interval<20||interval>1000||ttl<30||ttl>3600) return false;
