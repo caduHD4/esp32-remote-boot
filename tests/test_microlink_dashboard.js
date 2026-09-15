@@ -8,7 +8,7 @@ assert.deepEqual(format({built:false,configured:false,state:'disabled'}),{
   label:'DESATIVADO',detail:'Firmware padrão',tone:'neutral'
 });
 assert.deepEqual(format({built:true,configured:false,state:'not_configured'}),{
-  label:'NÃO CONFIGURADO',detail:'Adicione a chave no build',tone:'warning'
+  label:'NÃO CONFIGURADO',detail:'Adicione a chave na dashboard',tone:'warning'
 });
 assert.deepEqual(format({built:true,configured:true,state:'registering'}),{
   label:'REGISTRANDO',detail:'Aguardando a tailnet',tone:'warning'
