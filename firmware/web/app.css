@@ -36,6 +36,7 @@ svg{width:20px;height:20px;fill:currentColor;flex:0 0 auto}
 .field input,.field select{padding:11px 13px}
 .input-wrap{display:flex;align-items:center;padding-left:13px}.input-wrap svg{color:var(--subtle)}.input-wrap input{border:0;background:transparent;outline:0}
 .field input::placeholder{color:#61778b}
+.login-remember{display:flex;align-items:center;gap:10px;margin-top:16px;color:var(--muted);font-size:.86rem;font-weight:650;cursor:pointer}.login-remember input{width:18px;height:18px;margin:0;accent-color:var(--primary)}
 .field input[aria-invalid=true],.field select[aria-invalid=true]{border-color:var(--danger);box-shadow:0 0 0 3px rgba(255,107,120,.09)}
 .field-hint{color:var(--subtle);font-weight:500}.field-error{min-height:1em;color:#ff9ca5;font-weight:600}
 .inline-alert{padding:11px 13px;border-radius:10px;background:var(--danger-bg);color:#ffb1b8}
