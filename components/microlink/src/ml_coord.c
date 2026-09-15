@@ -2598,3 +2598,201 @@ void ml_coord_task(void *arg) {
                                 ESP_LOGI(TAG, "Sent STUN to fallback for NAT type detection");
                             }
                             parsed = true;
+                        }
+                    }
+
+                    if (parsed) {
+                        xEventGroupSetBits(ml->events, ML_EVT_STUN_COMPLETE);
+                        /* Send endpoint update to control plane immediately.
+                         * With Version >= 68, Stream=true MapRequests have endpoints
+                         * IGNORED, so we need this separate Stream=false request. */
+                        do_send_endpoint_update(ml, &noise);
+                    }
+                    free(stun_pkt.data);
+                }
+
+                /* STUN retry logic: 3 attempts per server, 2s apart, then fallback */
+                if (ml->stun_retry_count > 0 && ml->stun_retry_count <= ML_STUN_MAX_RETRIES) {
+                    if (now - ml->stun_last_probe_ms > ML_STUN_RETRY_INTERVAL_MS) {
+                        if (!ml->stun_using_fallback && ml->stun_primary_ip) {
+                            ml_stun_send_probe_to(ml, ml->stun_primary_ip, ML_STUN_PRIMARY_PORT);
+                        } else if (ml->stun_fallback_ip) {
+                            ml_stun_send_probe_to(ml, ml->stun_fallback_ip, ML_STUN_FALLBACK_PORT);
+                        }
+                        ml->stun_last_probe_ms = now;
+                        ml->stun_retry_count++;
+                        if (ml->stun_retry_count > ML_STUN_MAX_RETRIES && !ml->stun_using_fallback) {
+                            /* Primary exhausted, switch to fallback */
+                            ESP_LOGW(TAG, "STUN primary failed after %d retries, trying fallback",
+                                     ML_STUN_MAX_RETRIES);
+                            ml->stun_using_fallback = true;
+                            ml->stun_retry_count = 1;
+                            if (ml->stun_fallback_ip) {
+                                ml_stun_send_probe_to(ml, ml->stun_fallback_ip, ML_STUN_FALLBACK_PORT);
+                                ml->stun_last_probe_ms = now;
+                            }
+                        }
+                    }
+                }
+
+                /* Periodic STUN re-probe (every 23s) — fresh probe sequence */
+                static uint64_t last_stun_ms = 0;
+                if (now - last_stun_ms > ml->t_stun_interval_ms) {
+                    ml->stun_retry_count = 1;
+                    ml->stun_using_fallback = false;
+                    ml->stun_last_probe_ms = now;
+                    /* IPv4 probe */
+                    if (ml->stun_primary_ip) {
+                        ml_stun_send_probe_to(ml, ml->stun_primary_ip, ML_STUN_PRIMARY_PORT);
+                    } else if (ml->stun_fallback_ip) {
+                        ml->stun_using_fallback = true;
+                        ml_stun_send_probe_to(ml, ml->stun_fallback_ip, ML_STUN_FALLBACK_PORT);
+                    } else {
+                        ml_stun_send_probe(ml, ML_STUN_PRIMARY_HOST, ML_STUN_PRIMARY_PORT);
+                    }
+                    /* IPv6 probe (alongside IPv4) */
+                    {
+                        static const uint8_t zero16[16] = {0};
+                        if (memcmp(ml->stun_primary_ip6, zero16, 16) != 0) {
+                            ml_stun_send_probe_ipv6(ml, ml->stun_primary_ip6, ML_STUN_PRIMARY_PORT);
+                        }
+                    }
+                    last_stun_ms = now;
+                }
+
+                /* Periodic DERP NotePreferred keepalive (every 60s) */
+                static uint64_t last_derp_keepalive_ms = 0;
+                if (ml->derp.connected && now - last_derp_keepalive_ms > 60000) {
+                    uint8_t preferred = 0x01;
+                    uint8_t *ka_data = malloc(1);
+                    if (ka_data) {
+                        *ka_data = preferred;
+                        ml_derp_tx_item_t ka_item = {
+                            .data = ka_data,
+                            .len = 1,
+                            .frame_type = 0x07,  /* NotePreferred */
+                        };
+                        memset(ka_item.dest_pubkey, 0, 32);
+                        if (xQueueSend(ml->derp_tx_queue, &ka_item, 0) != pdTRUE) {
+                            free(ka_data);
+                        }
+                    }
+                    last_derp_keepalive_ms = now;
+                }
+
+                /* Key expiry check (every 60s) — re-register if expired */
+                if (ml->key_expiry_epoch > 0 || ml->key_expired) {
+                    static uint64_t last_expiry_check_ms = 0;
+                    if (now - last_expiry_check_ms > 60000) {
+                        last_expiry_check_ms = now;
+                        if (ml->key_expired) {
+                            if (ml->config.auth_key) {
+                                ESP_LOGW(TAG, "Key expired, re-registering with auth_key...");
+                                state = COORD_RECONNECTING;
+                                break;
+                            } else {
+                                ESP_LOGE(TAG, "Key expired but no auth_key — manual re-provisioning needed!");
+                            }
+                        }
+                        /* Warn 1 hour before expiry (rough uptime-based check) */
+                        /* Note: key_expiry_epoch is absolute Unix time, we compare with
+                         * approximate boot-relative time. For accurate check we'd need
+                         * SNTP, but this catches the Expired flag from the server. */
+                    }
+                }
+
+                /* Send HTTP/2 PING every 5 seconds to keep control plane alive.
+                 * The server has a ~20s idle timeout; PINGs maintain bidirectional
+                 * activity and are what actually keep us "online". (v1 reference) */
+                static uint64_t last_h2_ping_ms = 0;
+                if (now - last_h2_ping_ms >= 5000) {
+                    uint8_t ping_frame[17];
+                    ping_frame[0] = 0x00; ping_frame[1] = 0x00; ping_frame[2] = 0x08;
+                    ping_frame[3] = 0x06;  /* Type: PING */
+                    ping_frame[4] = 0x00;  /* Flags: none */
+                    ping_frame[5] = 0x00; ping_frame[6] = 0x00;
+                    ping_frame[7] = 0x00; ping_frame[8] = 0x00;  /* Stream 0 */
+                    /* Opaque 8-byte payload (timestamp for identification) */
+                    uint64_t ping_id = now;
+                    for (int b = 0; b < 8; b++)
+                        ping_frame[9 + b] = (ping_id >> (56 - b * 8)) & 0xFF;
+                    int ping_ret = noise_send(ml, &noise, ping_frame, sizeof(ping_frame));
+                    if (ping_ret >= 0) {
+                        last_h2_ping_ms = now;
+                    } else {
+                        ESP_LOGW(TAG, "H2 PING send failed, reconnecting");
+                        state = COORD_RECONNECTING;
+                        break;
+                    }
+                }
+
+                /* Poll for streaming MapResponse updates */
+                int poll_ret = poll_map_update(ml, &noise);
+                if (poll_ret > 0) {
+                    last_activity_ms = now;  /* Reset watchdog */
+                } else if (poll_ret < 0) {
+                    ESP_LOGW(TAG, "Long-poll connection lost");
+                    state = COORD_RECONNECTING;
+                    break;
+                }
+
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            break;
+
+        case COORD_RECONNECTING:
+            __atomic_store_n(&ml->diagnostics.control_online, 0, __ATOMIC_RELAXED);
+            __atomic_add_fetch(&ml->diagnostics.reconnects, 1, __ATOMIC_RELAXED);
+            ml_frame_reset(&ml->coord_rx);
+            ml_frame_reset(&ml->h2_rx);
+            ml_frame_reset(&ml->map_rx);
+            {
+                uint32_t backoff_ms = 1000 << (reconnect_attempts > 4 ? 4 : reconnect_attempts);
+                if (backoff_ms > ML_CTRL_BACKOFF_MAX_MS) backoff_ms = ML_CTRL_BACKOFF_MAX_MS;
+
+                ESP_LOGI(TAG, "Reconnecting in %lu ms (attempt %d)",
+                         (unsigned long)backoff_ms, reconnect_attempts + 1);
+
+                ml->state = ML_STATE_RECONNECTING;
+
+                /* Wait on command queue with backoff timeout (interruptible!) */
+                ml_coord_cmd_t wake_cmd;
+                if (xQueueReceive(ml->coord_cmd_queue, &wake_cmd, pdMS_TO_TICKS(backoff_ms)) == pdTRUE) {
+                    if (wake_cmd == ML_CMD_DISCONNECT) {
+                        state = COORD_IDLE;
+                        ml->state = ML_STATE_IDLE;
+                        break;
+                    }
+                }
+
+                reconnect_attempts++;
+
+                /* Close old connection */
+                if (ml->coord_sock >= 0) {
+                    ml_close_sock(ml->coord_sock);
+                    ml->coord_sock = -1;
+                }
+
+                /* Reset Noise state for fresh handshake */
+                memset(&noise, 0, sizeof(noise));
+
+                state = COORD_STUN_PROBE;
+            }
+            break;
+        }
+    }
+
+    /* Cleanup */
+    if (ml->coord_sock >= 0) {
+        ml_close_sock(ml->coord_sock);
+        ml->coord_sock = -1;
+    }
+    memset(&noise, 0, sizeof(noise));
+
+    ml_frame_reset(&ml->coord_rx);
+    ml_frame_reset(&ml->h2_rx);
+    ml_frame_reset(&ml->map_rx);
+    __atomic_store_n(&ml->diagnostics.control_online, 0, __ATOMIC_RELAXED);
+    ESP_LOGI(TAG, "Coord task exiting");
+    vTaskDelete(NULL);
+}
