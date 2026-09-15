@@ -16,6 +16,8 @@ int main() {
     lifecycle.recordStartResult(false);
     assert(std::strcmp(lifecycle.state(), "error") == 0);
     assert(!lifecycle.shouldStart(ready));
+    lifecycle.resetAfterWiFiLoss();
+    assert(lifecycle.shouldStart(ready));
 
     rb::MicrolinkLifecycle disabled;
     const rb::MicrolinkStartContext notBuilt{false, true, false, false, true};
