@@ -25,11 +25,13 @@ coord_source = (microlink / "src/ml_coord.c").read_text(encoding="utf-8")
 fetch_peers = coord_source.split("static int do_fetch_peers", 1)[1].split(
     "static int do_start_long_poll", 1
 )[0]
-assert fetch_peers.count("ml_psram_malloc(ML_H2_BUFFER_SIZE)") == 1
+assert "static uint8_t s_map_response_buffer[ML_H2_BUFFER_SIZE];" in coord_source
+assert "uint8_t *h2_recv = s_map_response_buffer;" in fetch_peers
+assert "ml_psram_malloc(ML_H2_BUFFER_SIZE)" not in fetch_peers
 assert "ml_psram_malloc(ML_JSON_BUFFER_SIZE)" not in fetch_peers
 assert "ml_psram_malloc(ML_NOISE_FRAME_BUFFER_SIZE)" not in fetch_peers
 assert "h2_recv + h2_total" in fetch_peers
-assert "MapResponse buffer allocation failed" in fetch_peers
+assert "MapResponse buffer allocation failed" not in fetch_peers
 assert "if (ML_H2_BUFFER_SIZE > 65535)" in coord_source
 
 with tempfile.TemporaryDirectory() as directory:
