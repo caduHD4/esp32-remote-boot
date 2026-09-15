@@ -17,7 +17,7 @@ agent_binary=${2:-$root/build/agent/$rid/remote-boot-agent}
 esp=${1:-}
 if [[ -z $esp ]]; then read -r -p 'ESP32 IPv4 address: ' esp; fi
 RB_URL="http://$esp"
-read -r -s -p 'Agent token from dashboard: ' RB_TOKEN; printf '\n'
+read -r -s -p 'Senha do agent (8-128 caracteres): ' RB_TOKEN; printf '\n'
 rb_api GET systems >/dev/null
 read -r -p 'Allow confirmed remote reboot? Type REBOOT: ' reboot_allow
 read -r -p 'Allow dashboard/Sinric shutdown? Type SHUTDOWN: ' shutdown_allow
