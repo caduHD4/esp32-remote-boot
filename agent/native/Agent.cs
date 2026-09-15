@@ -26,8 +26,7 @@ public sealed class Config {
         if(d.TryGetProperty("ws_port",out var port))c.WsPort=port.GetInt32();
         if(c.Url.Scheme!="http"||!IPAddress.TryParse(c.Url.Host,out var ip)||ip.AddressFamily!=System.Net.Sockets.AddressFamily.InterNetwork||
            c.Url.AbsolutePath!="/"||c.Url.Query!=""||c.Url.UserInfo!=""||c.WsPort<1||c.WsPort>65535||
-           c.Token==null||c.Token.Length<24||c.Token.Length>128)throw new Exception("Invalid configuration");
-        foreach(char ch in c.Token)if(!char.IsAsciiLetterOrDigit(ch)&&ch!='_'&&ch!='-')throw new Exception("Invalid token format");
+           !ValidToken(c.Token))throw new Exception("Invalid configuration");
         return c;
     }
 }
