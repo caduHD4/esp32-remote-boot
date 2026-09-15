@@ -11,7 +11,7 @@ New-Item -ItemType Directory -Path $destination -Force|Out-Null
 if($LASTEXITCODE -ne 0){throw 'Cannot protect agent configuration'}
 if(Get-ScheduledTask -TaskName RemoteBootAgent -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName RemoteBootAgent }
 Copy-Item -LiteralPath $AgentFile -Destination (Join-Path $destination 'remote-boot-agent.exe') -Force
-$secret=Read-Host 'Agent token' -AsSecureString
+$secret=Read-Host 'Senha do agent (8-128 caracteres)' -AsSecureString
 $allow=(Read-Host 'Type REBOOT to allow dashboard-confirmed reboot commands') -eq 'REBOOT'
 $allowShutdown=(Read-Host 'Type SHUTDOWN to allow dashboard/Sinric shutdown commands') -eq 'SHUTDOWN'
 @{url="http://$EspAddress";token=[Net.NetworkCredential]::new('',$secret).Password;allow_reboot=$allow;allow_shutdown=$allowShutdown}|ConvertTo-Json|Set-Content (Join-Path $destination 'agent.json')
