@@ -13,7 +13,7 @@ assert stable["framework"].strip() == "arduino"
 assert "REMOTE_BOOT_ENABLE_MICROLINK" not in stable["build_flags"]
 assert {item.strip() for item in hybrid["framework"].split(",")} == {"arduino", "espidf"}
 assert "REMOTE_BOOT_ENABLE_MICROLINK=1" in hybrid["build_flags"]
-assert "embed_microlink_config.py" in hybrid["extra_scripts"]
+assert "embed_microlink_config.py" not in hybrid["extra_scripts"]
 assert "board_build.sdkconfig_defaults" not in hybrid
 ignored_libraries = {item.strip() for item in hybrid["lib_ignore"].splitlines() if item.strip()}
 assert "NetworkClientSecure" in ignored_libraries
@@ -53,6 +53,12 @@ assert "pipx install --force platformio==6.1.19" in readme
 assert "pipx install --force platformio==6.1.19" in microlink_guide
 assert "6.1.19 ou mais recente" not in readme
 assert "6.1.19 ou mais recente" not in microlink_guide
+assert "config.local.microlink.json" not in microlink_guide
+assert "dashboard" in microlink_guide.lower()
+
+runtime = (root / "firmware/src/microlink_runtime.cpp").read_text(encoding="utf-8")
+assert "microlink_config.generated.h" not in runtime
+assert "config[\"tailscale_auth_key\"]" in (root / "firmware/src/main.cpp").read_text(encoding="utf-8")
 
 for workflow_name in ("ci.yml", "release.yml"):
     workflow = (root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
