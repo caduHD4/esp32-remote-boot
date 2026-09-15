@@ -147,7 +147,6 @@ void wolTick() {
 bool hasLocalWiFi() { return strlen(REMOTE_BOOT_LOCAL_WIFI_SSID)>0; }
 void startWiFiAttempt() {
     if(!hasLocalWiFi()) return;
-    WiFi.disconnect(false,false);
     WiFi.begin(REMOTE_BOOT_LOCAL_WIFI_SSID,REMOTE_BOOT_LOCAL_WIFI_PASSWORD);
     wifiReconnect.recordAttempt(millis());
     logEvent("WIFI_CONNECT_ATTEMPT");
@@ -387,7 +386,9 @@ void loop() {
         setupCredentialReported=true;
         logEvent("SETUP_TOKEN_READY");
     }
-    if(wifiReconnect.due(millis())) startWiFiAttempt();
+    // Arduino's STA auto-reconnect owns reconnects after the first begin().
+    // Calling WiFi.begin() again while the IDF driver is associating clears
+    // its configuration and causes ESP_ERR_WIFI_STATE / reconnect loops.
     server.handleClient(); agentSocketTick(); wolTick(); microlink.tick(wifiConnected);
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);
 }
