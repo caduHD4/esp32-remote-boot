@@ -21,7 +21,7 @@
 constexpr char Version[]="2.2.2-no-ap-reliable-wifi";
 WebServer server(80); WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
-bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
+bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false,setupCredentialReported=false;
 String setupKey,osName,hostName,logs[32],agentSession;
 rb::PowerCommand powerCommand;
 rb::WiFiReconnectPolicy wifiReconnect;
@@ -367,7 +367,6 @@ void setup() {
         config["wifi_password"]=REMOTE_BOOT_LOCAL_WIFI_PASSWORD;
         if(!stored.length()) {
             setupMode=true; setupKey=randomSetupCredential();
-            Serial.println("Setup dashboard password: "+setupKey);
             logEvent("SETUP_WIFI_WAIT");
         }
         if(!config["dhcp"].as<bool>()) { IPAddress ip,mask,gateway,resolver; ip.fromString(config["ip"].as<const char*>()); mask.fromString(config["subnet"].as<const char*>()); gateway.fromString(config["gateway"].as<const char*>()); resolver.fromString(config["dns"].as<const char*>()); WiFi.config(ip,gateway,mask,resolver); }
@@ -380,6 +379,12 @@ void loop() {
     if(sinricStarted && microlink.beginSinricHandle(sinricOnline)) { SinricPro.handle(); microlink.endSinricHandle(sinricOnline,[]{ SinricPro.stop(); SinricPro.begin(config["sinric_app_key"].as<const char*>(),config["sinric_app_secret"].as<const char*>()); }); for(int i=0;i<8;++i) if(rb::sinricResetDue(slotReset[i],millis())) { SinricProSwitch& d=SinricPro[slotIds[i]]; slotReset[i]=rb::nextSinricReset(millis(),d.sendPowerStateEvent(false)); } }
     const bool wifiConnected=WiFi.status()==WL_CONNECTED;
     wifiReconnect.observe(wifiConnected,millis());
+    if(wifiConnected&&setupMode&&!setupCredentialReported) {
+        Serial.println("Wi-Fi connected: "+WiFi.localIP().toString());
+        Serial.println("Setup access token: "+setupKey);
+        setupCredentialReported=true;
+        logEvent("SETUP_TOKEN_READY");
+    }
     if(wifiReconnect.due(millis())) startWiFiAttempt();
     server.handleClient(); agentSocketTick(); wolTick(); microlink.tick(wifiConnected);
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);
