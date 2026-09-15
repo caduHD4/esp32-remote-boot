@@ -152,8 +152,7 @@ A variante `esp32c3_4mb_microlink` permite acessar a dashboard pelo IP Tailscale
 
 ```bash
 pipx install --force platformio==6.1.19
-cp config.microlink.example.json config.local.microlink.json
-# Preencha a auth key local antes do build.
+# Cadastre a Auth Key pela dashboard após gravar.
 pio run -e esp32c3_4mb_microlink -t upload
 pio device monitor -b 115200
 ```
