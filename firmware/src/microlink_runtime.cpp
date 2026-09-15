@@ -19,6 +19,14 @@ void MicrolinkRuntime::begin(bool configLocked, bool setupMode, bool wifiConnect
 }
 
 void MicrolinkRuntime::tick(bool wifiConnected) {
+#if defined(REMOTE_BOOT_ENABLE_MICROLINK) && REMOTE_BOOT_ENABLE_MICROLINK
+    if (wifiConnected_ && !wifiConnected) {
+        if (handle_) microlink_destroy(handle_);
+        handle_ = nullptr;
+        lifecycle_.resetAfterWiFiLoss();
+        Serial.println("MicroLink: Wi-Fi lost; runtime stopped");
+    }
+#endif
     wifiConnected_ = wifiConnected;
     tryStart(wifiConnected);
 }
