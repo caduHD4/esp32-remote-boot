@@ -11,9 +11,9 @@ inline bool migrateConfig(JsonDocument& d) {
 }
 inline void redactConfig(const JsonDocument& source,JsonObject dest) {
     dest.set(source.as<JsonObjectConst>());
-    const char* secret[]={"wifi_password","admin_token","agent_token","sinric_app_secret","sinric_app_key"};
-    const char* presence[]={"wifi_password_set","admin_token_set","agent_token_set","sinric_app_secret_set","sinric_app_key_set"};
-    for(int i=0;i<5;++i) { dest[presence[i]]=std::strlen(source[secret[i]]|"")>0; dest.remove(secret[i]); }
+    const char* secret[]={"wifi_password","admin_token","agent_token","sinric_app_secret","sinric_app_key","tailscale_auth_key"};
+    const char* presence[]={"wifi_password_set","admin_token_set","agent_token_set","sinric_app_secret_set","sinric_app_key_set","tailscale_auth_key_set"};
+    for(int i=0;i<6;++i) { dest[presence[i]]=std::strlen(source[secret[i]]|"")>0; dest.remove(secret[i]); }
 }
 inline void redactConfig(const JsonDocument& source,JsonDocument& dest) { redactConfig(source,dest.to<JsonObject>()); }
 }
