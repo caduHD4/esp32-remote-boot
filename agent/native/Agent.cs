@@ -13,6 +13,11 @@ using System.Threading.Tasks;
 namespace RemoteBoot {
 public sealed class Config {
     public Uri Url;public string Token;public bool AllowShutdown,AllowReboot;public int WsPort=81;
+    public static bool ValidToken(string token) {
+        if(token==null||token.Length<8||token.Length>128)return false;
+        foreach(char character in token)if(char.IsControl(character))return false;
+        return true;
+    }
     public static Config Read(string path) {
         if(new FileInfo(path).Length>16384)throw new Exception("Configuration too large");
         using var doc=JsonDocument.Parse(File.ReadAllText(path));var d=doc.RootElement;
