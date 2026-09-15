@@ -198,7 +198,7 @@ function status(){
   return statusRequest
 }
 async function connect(){
-  token=$('token').value.trim();$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
+  token=$('token').value;$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
   try{
     const initial=await api('bootstrap');cfg=initial.config;systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();applyStatus(initial.status);clearInterval(refreshTimer);statusPoller=createStatusPoller({poll:()=>status().catch(error=>showToast(error.message,true)),isHidden:()=>document.hidden});refreshTimer=setInterval(statusPoller.tick,15000);showToast('Dashboard conectada.')
   }catch(error){$('loginError').textContent=error.message;$('loginError').hidden=false}
