@@ -1,4 +1,7 @@
 'use strict';
+function validateTailscaleAuthKey(value){
+  return !value||(value.startsWith('tskey-auth-')&&value.length>=20&&value.length<=159&&!/[\x00-\x1f\x7f]/.test(value));
+}
 function validateCredential(value){
   return typeof value==='string'&&value.length>=8&&value.length<=128&&!/[\x00-\x1f\x7f]/.test(value);
 }
@@ -26,7 +29,7 @@ function validateSinric(input){
 }
 function formatTailscaleStatus(tailscale={}){
   if(!tailscale.built)return {label:'DESATIVADO',detail:'Firmware padrão',tone:'neutral'};
-  if(!tailscale.configured)return {label:'NÃO CONFIGURADO',detail:'Adicione a chave no build',tone:'warning'};
+  if(!tailscale.configured)return {label:'NÃO CONFIGURADO',detail:'Adicione a chave na dashboard',tone:'warning'};
   if(tailscale.state==='wifi_offline')return {label:'AGUARDANDO WI-FI',detail:'Acesso local preservado',tone:'warning'};
   if(tailscale.state==='peer_wait')return {label:'CONTROLE ONLINE',detail:(tailscale.derp_online?'Relay online':'Relay pendente')+' • Sem tráfego autenticado recente',tone:'warning'};
   if(tailscale.connected){
@@ -49,7 +52,7 @@ function createStatusPoller({poll,isHidden}){
   return {tick,visibilityChanged:()=>{if(!isHidden())tick()}}
 }
 function statusControls(state){return {shutdownDisabled:!state.shutdown_enabled}}
-globalThis.RemoteBootValidation={validateCredential,validateSinric,formatTailscaleStatus,createStatusPoller,statusControls};
+globalThis.RemoteBootValidation={validateCredential,validateTailscaleAuthKey,validateSinric,formatTailscaleStatus,createStatusPoller,statusControls};
 if(typeof document!=='undefined'){
 const $=id=>document.getElementById(id);
 let token='',cfg={},systems=[],slots=[],refreshTimer,statusPoller,statusRequest;
@@ -65,7 +68,9 @@ const fields=[
     ['default_target','Sistema padrão','target'],['fallback_boot_id','Fallback','target'],
     ['pending_ttl_s','Validade da seleção (segundos)','number'],['physical_boot_behavior','Botão físico do PC','behavior']]],
   ['Acesso','Senhas de administração e agent (8–128 caracteres)',[
-    ['admin_token','Nova senha administrativa','password'],['agent_token','Nova senha do agent','password']]]
+    ['admin_token','Nova senha administrativa','password'],['agent_token','Nova senha do agent','password']]],
+  ['Tailscale','Acesso remoto opcional pelo firmware MicroLink',[
+    ['tailscale_auth_key','Auth Key do Tailscale','password'],['tailscale_device_name','Nome do dispositivo Tailscale']]]
 ];
 
 function icon(name){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#icon-'+name);svg.append(use);return svg}
@@ -232,6 +237,8 @@ $('settings').onsubmit=async event=>{
   for(const key of ['admin_token','agent_token']){const value=$('f_'+key).value;if(value&&!validateCredential(value))credentialErrors[key]='Use de 8 a 128 caracteres sem caracteres de controle.'}
   if($('f_admin_token').value&&$('f_agent_token').value&&$('f_admin_token').value===$('f_agent_token').value)credentialErrors.agent_token='A senha do agent deve ser diferente da administrativa.';
   if(Object.keys(credentialErrors).length){showFieldErrors(credentialErrors);showToast('Revise as senhas antes de salvar.',true);setActiveView('settings');return}
+  const tailscaleKey=$('f_tailscale_auth_key').value;
+  if(tailscaleKey&&!validateTailscaleAuthKey(tailscaleKey)){showFieldErrors({tailscale_auth_key:'Use uma Auth Key tskey-auth- válida.'});showToast('Revise a chave do Tailscale.',true);setActiveView('settings');return}
   const validation=validateSinric({enabled:$('f_sinric_enabled').checked,appKey:$('f_sinric_app_key').value,appKeySet:!!cfg.sinric_app_key_set,appSecret:$('f_sinric_app_secret').value,appSecretSet:!!cfg.sinric_app_secret_set,slots,validBootIds:systems.filter(entry=>!entry.blocked).map(entry=>entry.id)});
   if(!validation.valid){showFieldErrors(validation.errors);showToast('Revise a configuração do Sinric antes de salvar.',true);setActiveView('sinric');return}
   clearFieldErrors();slots=validation.slots;renderSlots();
