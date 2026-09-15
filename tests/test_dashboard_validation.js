@@ -4,6 +4,10 @@ require('../firmware/web/app.js');
 
 const validate=globalThis.RemoteBootValidation.validateSinric;
 const credential=globalThis.RemoteBootValidation.validateCredential;
+const tailscaleKey=globalThis.RemoteBootValidation.validateTailscaleAuthKey;
+assert.equal(tailscaleKey(''),true);
+assert.equal(tailscaleKey('tskey-auth-k12345678901234567890'),true);
+assert.equal(tailscaleKey('invalid'),false);
 assert.equal(credential('12345678'),true);
 assert.equal(credential('senha !@#'),true);
 assert.equal(credential('1234567'),false);
