@@ -18,4 +18,4 @@ Atualização ESP32: upload PlatformIO padrão não faz erase-flash. Não use er
 
 Para testar acesso remoto pelo próprio ESP32-C3, siga [MicroLink + Tailscale](microlink-tailscale.md). A variante experimental tem um environment separado; voltar a `esp32c3_4mb` não apaga a NVS.
 
-Tokens precisam ser atualizados nos agents se forem trocados na dashboard. Alterações Sinric/rede reiniciam ESP32; salve trabalho na UI primeiro.
+Senhas do agent precisam ser atualizadas nos PCs se forem trocadas na dashboard. As senhas admin e agent aceitam 8–128 caracteres e precisam ser diferentes. O Wi-Fi é definido exclusivamente em `config.local.json`; não há SoftAP nem recuperação por AP. Quedas de energia e de Wi-Fi acionam reconexão automática.
