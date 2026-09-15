@@ -52,7 +52,10 @@ function createStatusPoller({poll,isHidden}){
   return {tick,visibilityChanged:()=>{if(!isHidden())tick()}}
 }
 function statusControls(state){return {shutdownDisabled:!state.shutdown_enabled}}
-globalThis.RemoteBootValidation={validateCredential,validateTailscaleAuthKey,validateSinric,formatTailscaleStatus,createStatusPoller,statusControls};
+const rememberedLoginKey='remote-boot-admin-token';
+function rememberedLogin(storage){try{return storage.getItem(rememberedLoginKey)||''}catch(_){return ''}}
+function storeRememberedLogin(storage,value,remember){try{if(remember&&value)storage.setItem(rememberedLoginKey,value);else storage.removeItem(rememberedLoginKey)}catch(_){}}
+globalThis.RemoteBootValidation={validateCredential,validateTailscaleAuthKey,validateSinric,formatTailscaleStatus,createStatusPoller,statusControls,rememberedLogin,storeRememberedLogin};
 if(typeof document!=='undefined'){
 const $=id=>document.getElementById(id);
 let token='',cfg={},systems=[],slots=[],refreshTimer,statusPoller,statusRequest;
@@ -205,8 +208,8 @@ function status(){
 async function connect(){
   token=$('token').value;$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
   try{
-    const initial=await api('bootstrap');cfg=initial.config;systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();applyStatus(initial.status);clearInterval(refreshTimer);statusPoller=createStatusPoller({poll:()=>status().catch(error=>showToast(error.message,true)),isHidden:()=>document.hidden});refreshTimer=setInterval(statusPoller.tick,15000);showToast('Dashboard conectada.')
-  }catch(error){$('loginError').textContent=error.message;$('loginError').hidden=false}
+    const initial=await api('bootstrap');storeRememberedLogin(localStorage,token,$('rememberLogin').checked);cfg=initial.config;systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();applyStatus(initial.status);clearInterval(refreshTimer);statusPoller=createStatusPoller({poll:()=>status().catch(error=>showToast(error.message,true)),isHidden:()=>document.hidden});refreshTimer=setInterval(statusPoller.tick,15000);showToast('Dashboard conectada.')
+  }catch(error){if(error.message.includes('FORBIDDEN')){storeRememberedLogin(localStorage,'',false);$('rememberLogin').checked=false}$('loginError').textContent=error.message;$('loginError').hidden=false}
   finally{setBusy($('connect'),false)}
 }
 function clearFieldErrors(){document.querySelectorAll('.field-error').forEach(error=>error.textContent='');document.querySelectorAll('[aria-invalid=true]').forEach(input=>input.removeAttribute('aria-invalid'))}
@@ -225,7 +228,8 @@ function collectPatch(validatedSlots=slots){
   patch.sinric_enabled=$('f_sinric_enabled').checked;if($('f_sinric_app_key').value)patch.sinric_app_key=$('f_sinric_app_key').value;if($('f_sinric_app_secret').value)patch.sinric_app_secret=$('f_sinric_app_secret').value;
   patch.systems=systems;patch.sinric_slots=validatedSlots;return patch
 }
-$('connect').onclick=connect;$('token').addEventListener('keydown',event=>{if(event.key==='Enter')connect()});
+$('connect').onclick=connect;$('token').addEventListener('keydown',event=>{if(event.key==='Enter')connect()});$('rememberLogin').addEventListener('change',()=>{if(!$('rememberLogin').checked)storeRememberedLogin(localStorage,'',false)});
+const savedLogin=rememberedLogin(localStorage);if(savedLogin){$('token').value=savedLogin;$('rememberLogin').checked=true;connect()}
 document.addEventListener('visibilitychange',()=>statusPoller?.visibilityChanged());
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>setActiveView(button.dataset.view)));
 $('refreshStatus').onclick=button=>action(()=>status(),button.currentTarget,'Status atualizado.');
