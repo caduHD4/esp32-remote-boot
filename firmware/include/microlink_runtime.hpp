@@ -28,7 +28,7 @@ struct MicrolinkSnapshot {
 
 class MicrolinkRuntime {
 public:
-    void begin(bool configLocked, bool setupMode, bool wifiConnected);
+    void begin(bool configLocked, bool setupMode, bool wifiConnected, const char* authKey, const char* deviceName);
     void tick(bool wifiConnected);
     MicrolinkSnapshot snapshot() const;
     bool beginSinricHandle(bool connected);
@@ -43,6 +43,8 @@ private:
     bool configLocked_ = false;
     bool setupMode_ = false;
     MicrolinkLifecycle lifecycle_;
+    char authKey_[160]{};
+    char deviceName_[64]{};
 #if defined(REMOTE_BOOT_ENABLE_MICROLINK) && REMOTE_BOOT_ENABLE_MICROLINK
     microlink_t* handle_ = nullptr;
 #endif
