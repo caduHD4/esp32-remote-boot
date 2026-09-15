@@ -62,7 +62,7 @@ void defaults(JsonDocument& d) {
     d["config_version"]=2; d["pc_name"]="PC"; d["dhcp"]=true;
     d["wol_port"]=9; d["wol_repeat"]=5; d["wol_interval_ms"]=100;
     d["pending_ttl_s"]=180; d["physical_boot_behavior"]="default_target";
-    d["default_target"]=""; d["fallback_boot_id"]=""; d["sinric_enabled"]=false;
+    d["default_target"]=""; d["fallback_boot_id"]=""; d["sinric_enabled"]=false; d["tailscale_auth_key"]=""; d["tailscale_device_name"]="";
     d["systems"].to<JsonArray>(); d["sinric_slots"].to<JsonArray>();
 }
 bool parseMac(const char* text,uint8_t* mac) {
@@ -72,12 +72,14 @@ bool parseMac(const char* text,uint8_t* mac) {
     for(int i=0;i<6;++i) { int high=hex(text[i*3]),low=hex(text[i*3+1]); if(high<0||low<0||(i<5&&text[i*3+2]!=':')) return false; mac[i]=high*16+low; nonzero|=mac[i]!=0; }
     return nonzero && !(mac[0]&1);
 }
+bool validTailscaleAuthKey(const char* key) { if(!key||!*key) return true; if(strncmp(key,"tskey-auth-",11)!=0||strlen(key)<20||strlen(key)>159) return false; for(size_t i=0;key[i];++i) if(static_cast<unsigned char>(key[i])<32||static_cast<unsigned char>(key[i])==127) return false; return true; }
 bool validate(JsonDocument& d) {
     uint8_t mac[6];
     if(d["config_version"].as<int>()!=2 || !d["ssid"].is<const char*>() || strlen(d["ssid"].as<const char*>())<1 || strlen(d["ssid"].as<const char*>())>32 || !parseMac(d["mac"],mac)) return false;
     for(const char* key:{"admin_token","agent_token"}) if(!rb::validCredential(d[key].as<const char*>())) return false;
     if(!rb::credentialsDistinct(d["admin_token"].as<const char*>(),d["agent_token"].as<const char*>())) return false;
     for(const char* key:{"wifi_password","pc_name","sinric_app_key","sinric_app_secret"}) if(d[key].is<const char*>()&&strlen(d[key])>128) return false;
+    if(!validTailscaleAuthKey(d["tailscale_auth_key"]|"" ) || strlen(d["tailscale_device_name"]|"")>63) return false;
     int port=d["wol_port"],repeat=d["wol_repeat"],interval=d["wol_interval_ms"],ttl=d["pending_ttl_s"];
     if(port<1||port>65535||repeat<1||repeat>10||interval<20||interval>1000||ttl<30||ttl>3600) return false;
     String behavior=d["physical_boot_behavior"]|"";
@@ -184,7 +186,7 @@ void routes() {
     server.on("/api/v1/bootstrap",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; rb::redactConfig(config,d["config"].to<JsonObject>()); appendStatus(d["status"].to<JsonObject>()); jsonReply(200,d); });
     server.on("/api/v1/config",HTTP_PUT,[]{ if(!auth()) return; if(locked) { errorReply(409,"SCHEMA_LOCKED"); return; }
         JsonDocument patch,next; if(!body(patch)) return; next.set(config);
-        const char* allowed="|admin_token|agent_token|pc_name|mac|dhcp|ip|subnet|gateway|dns|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|sinric_enabled|sinric_app_key|sinric_app_secret|sinric_slots|systems|";
+        const char* allowed="|admin_token|agent_token|pc_name|mac|dhcp|ip|subnet|gateway|dns|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|sinric_enabled|sinric_app_key|sinric_app_secret|sinric_slots|systems|tailscale_auth_key|tailscale_device_name|";
         for(JsonPair p:patch.as<JsonObject>()) { if(!strstr(allowed,(String("|")+p.key().c_str()+"|").c_str())) { errorReply(400,"UNKNOWN_FIELD"); return; } next[p.key()]=p.value(); }
         if(rb::sinricReadiness(next["sinric_enabled"].as<bool>(),next["sinric_app_key"]|"",next["sinric_app_secret"]|"")==rb::SinricReadiness::MissingCredentials) { errorReply(400,"SINRIC_CREDENTIALS_REQUIRED"); return; }
         if(!validate(next)) { errorReply(400,"INVALID_CONFIG"); return; }
@@ -373,7 +375,7 @@ void setup() {
         wifiReconnect.reset(millis());
         startWiFiAttempt();
     }
-    routes(); startAgentSocket(); startSinric(); microlink.begin(locked,setupMode,WiFi.status()==WL_CONNECTED); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
+    routes(); startAgentSocket(); startSinric(); microlink.begin(locked,setupMode,WiFi.status()==WL_CONNECTED,config["tailscale_auth_key"]|"",config["tailscale_device_name"]|""); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
 }
 void loop() {
     if(sinricStarted && microlink.beginSinricHandle(sinricOnline)) { SinricPro.handle(); microlink.endSinricHandle(sinricOnline,[]{ SinricPro.stop(); SinricPro.begin(config["sinric_app_key"].as<const char*>(),config["sinric_app_secret"].as<const char*>()); }); for(int i=0;i<8;++i) if(rb::sinricResetDue(slotReset[i],millis())) { SinricProSwitch& d=SinricPro[slotIds[i]]; slotReset[i]=rb::nextSinricReset(millis(),d.sendPowerStateEvent(false)); } }
