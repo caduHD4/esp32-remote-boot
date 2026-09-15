@@ -5,13 +5,12 @@
 #include "esp_system.h"
 #include "../../components/microlink/src/ml_transport_policy.h"
 
-#if defined(REMOTE_BOOT_ENABLE_MICROLINK) && REMOTE_BOOT_ENABLE_MICROLINK
-#include "microlink_config.generated.h"
-#endif
 
 namespace rb {
 
-void MicrolinkRuntime::begin(bool configLocked, bool setupMode, bool wifiConnected) {
+void MicrolinkRuntime::begin(bool configLocked, bool setupMode, bool wifiConnected, const char* authKey, const char* deviceName) {
+    strlcpy(authKey_, authKey ? authKey : "", sizeof authKey_);
+    strlcpy(deviceName_, deviceName ? deviceName : "", sizeof deviceName_);
     wifiConnected_ = wifiConnected;
     configLocked_ = configLocked;
     setupMode_ = setupMode;
@@ -35,7 +34,7 @@ void MicrolinkRuntime::tryStart(bool wifiConnected) {
 #if defined(REMOTE_BOOT_ENABLE_MICROLINK) && REMOTE_BOOT_ENABLE_MICROLINK
     const MicrolinkStartContext context{
         true,
-        REMOTE_BOOT_MICROLINK_CONFIGURED == 1,
+        authKey_[0] != '\0',
         configLocked_,
         setupMode_,
         wifiConnected,
@@ -43,9 +42,9 @@ void MicrolinkRuntime::tryStart(bool wifiConnected) {
     if (!lifecycle_.shouldStart(context)) return;
 
     microlink_config_t configuration{};
-    configuration.auth_key = REMOTE_BOOT_MICROLINK_AUTH_KEY;
-    configuration.device_name = REMOTE_BOOT_MICROLINK_DEVICE_NAME[0]
-        ? REMOTE_BOOT_MICROLINK_DEVICE_NAME
+    configuration.auth_key = authKey_;
+    configuration.device_name = deviceName_[0]
+        ? deviceName_
         : microlink_default_device_name();
     configuration.enable_derp = true;
     configuration.enable_stun = true;
@@ -109,7 +108,7 @@ MicrolinkSnapshot MicrolinkRuntime::snapshot() const {
     MicrolinkSnapshot result;
 #if defined(REMOTE_BOOT_ENABLE_MICROLINK) && REMOTE_BOOT_ENABLE_MICROLINK
     result.built = true;
-    result.configured = REMOTE_BOOT_MICROLINK_CONFIGURED == 1;
+    result.configured = authKey_[0] != '\0';
     result.state = lifecycle_.state();
     if (handle_) {
         const microlink_state_t state = microlink_get_state(handle_);
