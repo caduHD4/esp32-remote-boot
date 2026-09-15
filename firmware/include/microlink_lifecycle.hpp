@@ -32,6 +32,12 @@ public:
         failed_ = !success;
     }
 
+    void resetAfterWiFiLoss() {
+        attempted_ = false;
+        failed_ = false;
+        decision_ = MicrolinkDecision::WifiOffline;
+    }
+
     const char* state() const {
         return failed_ ? "error" : microlinkDecisionName(decision_);
     }
