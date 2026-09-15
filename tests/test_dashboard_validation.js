@@ -3,6 +3,11 @@ const assert=require('node:assert/strict');
 require('../firmware/web/app.js');
 
 const validate=globalThis.RemoteBootValidation.validateSinric;
+const credential=globalThis.RemoteBootValidation.validateCredential;
+assert.equal(credential('12345678'),true);
+assert.equal(credential('senha !@#'),true);
+assert.equal(credential('1234567'),false);
+assert.equal(credential('linha\nquebrada'),false);
 const base={enabled:false,appKey:'',appKeySet:false,appSecret:'',appSecretSet:false,slots:[],validBootIds:['0000','0008']};
 const check=overrides=>validate({...base,...overrides});
 
