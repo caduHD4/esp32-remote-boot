@@ -2,7 +2,6 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WebServer.h>
-#include <DNSServer.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <WebSocketsServer.h>
@@ -12,19 +11,20 @@
 #include "boot_state.hpp"
 #include "power_command.hpp"
 #include "config_policy.hpp"
-#include "setup_network_policy.hpp"
+#include "credential_policy.hpp"
+#include "wifi_reconnect_policy.hpp"
 #include "sinric_policy.hpp"
 #include "microlink_runtime.hpp"
 #include "local_wifi.h"
 #include "web_asset.h"
 
 constexpr char Version[]="2.2.1-cloud-stability";
-WebServer server(80); DNSServer dns; WiFiUDP udp; Preferences nvs;
+WebServer server(80); WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
 bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false;
 String setupKey,osName,hostName,logs[32],agentSession;
 rb::PowerCommand powerCommand;
-rb::SetupNetworkPolicy setupNetwork;
+rb::WiFiReconnectPolicy wifiReconnect;
 rb::MicrolinkRuntime microlink;
 uint32_t logIndex=0,restartAt=0,lastWol=0,wolAt=0;
 uint8_t wolRemaining=0; bool wolSent=false;
@@ -57,6 +57,7 @@ bool body(JsonDocument& doc) {
     return true;
 }
 String randomToken() { char b[33]; for(int i=0;i<4;++i) snprintf(b+i*8,9,"%08lx",static_cast<unsigned long>(esp_random())); return b; }
+String randomSetupCredential() { char b[9]; snprintf(b,sizeof b,"%08lx",static_cast<unsigned long>(esp_random())); return b; }
 void defaults(JsonDocument& d) {
     d["config_version"]=2; d["pc_name"]="PC"; d["dhcp"]=true;
     d["wol_port"]=9; d["wol_repeat"]=5; d["wol_interval_ms"]=100;
@@ -74,11 +75,8 @@ bool parseMac(const char* text,uint8_t* mac) {
 bool validate(JsonDocument& d) {
     uint8_t mac[6];
     if(d["config_version"].as<int>()!=2 || !d["ssid"].is<const char*>() || strlen(d["ssid"].as<const char*>())<1 || strlen(d["ssid"].as<const char*>())>32 || !parseMac(d["mac"],mac)) return false;
-    for(const char* key:{"admin_token","agent_token"}) {
-        const char* s=d[key]; if(!s||strlen(s)<24||strlen(s)>128) return false;
-        for(size_t i=0;s[i];++i) if(!isalnum(static_cast<unsigned char>(s[i]))&&s[i]!='_'&&s[i]!='-') return false;
-    }
-    if(strcmp(d["admin_token"],d["agent_token"])==0) return false;
+    for(const char* key:{"admin_token","agent_token"}) if(!rb::validCredential(d[key])) return false;
+    if(!rb::credentialsDistinct(d["admin_token"],d["agent_token"])) return false;
     for(const char* key:{"wifi_password","pc_name","sinric_app_key","sinric_app_secret"}) if(d[key].is<const char*>()&&strlen(d[key])>128) return false;
     int port=d["wol_port"],repeat=d["wol_repeat"],interval=d["wol_interval_ms"],ttl=d["pending_ttl_s"];
     if(port<1||port>65535||repeat<1||repeat>10||interval<20||interval>1000||ttl<30||ttl>3600) return false;
@@ -144,21 +142,18 @@ void wolTick() {
     else logEvent("WOL_FAILED");
     --wolRemaining; lastWol=millis(); wolSent=true; wolAt=millis()+config["wol_interval_ms"].as<uint32_t>();
 }
-void setupAP() {
-    setupMode=true; WiFi.mode(WIFI_AP_STA); setupKey=randomToken();
-    String name="RemoteBoot-"+String(static_cast<uint32_t>(ESP.getEfuseMac())&0xffff,HEX);
-    WiFi.softAP(name.c_str(),setupKey.c_str()); dns.start(53,"*",WiFi.softAPIP()); setupNetwork.accessPointStarted();
-    Serial.println("Setup AP: "+name); Serial.println("Setup Wi-Fi password / first-run token: "+setupKey);
-    logEvent("SETUP_AP_STARTED");
-}
-bool connectWiFi(const char* ssid,const char* password) {
-    WiFi.begin(ssid,password);
-    uint32_t start=millis(); while(WiFi.status()!=WL_CONNECTED&&millis()-start<20000) delay(50);
-    return WiFi.status()==WL_CONNECTED;
+bool hasLocalWiFi() { return strlen(REMOTE_BOOT_LOCAL_WIFI_SSID)>0; }
+void startWiFiAttempt() {
+    if(!hasLocalWiFi()) return;
+    WiFi.disconnect(false,false);
+    WiFi.begin(REMOTE_BOOT_LOCAL_WIFI_SSID,REMOTE_BOOT_LOCAL_WIFI_PASSWORD);
+    wifiReconnect.recordAttempt(millis());
+    logEvent("WIFI_CONNECT_ATTEMPT");
 }
 void appendStatus(JsonObject d) {
     d["version"]=Version; d["setup_mode"]=setupMode; d["config_locked"]=locked; d["online"]=state.online(millis());
     d["os"]=osName; d["hostname"]=hostName; d["ip"]=WiFi.localIP().toString(); d["rssi"]=WiFi.RSSI();
+    d["wifi_connected"]=WiFi.status()==WL_CONNECTED; d["wifi_reconnect_attempts"]=wifiReconnect.attempts(); d["wifi_retry_in_ms"]=wifiReconnect.retryInMs(millis());
     d["sinric_online"]=sinricOnline; d["uptime"]=millis()/1000; d["heap"]=ESP.getFreeHeap();
     d["agent_transport"]=socketAgent>=0?"websocket":"http-legacy";
     d["reboot_enabled"]=agentRebootEnabled && state.online(millis());
@@ -175,7 +170,7 @@ void appendStatus(JsonObject d) {
 }
 void routes() {
     const char* headers[]={"Authorization","If-None-Match"}; server.collectHeaders(headers,2);
-    server.on("/",HTTP_GET,[]{ String etag=String('"')+webAssetEtag+'"'; server.sendHeader("ETag",etag); server.sendHeader("Cache-Control","public, max-age=0, must-revalidate"); if(server.header("If-None-Match")==etag) { server.send(304); return; } server.sendHeader("Content-Encoding","gzip"); server.send_P(200,"text/html",reinterpret_cast<const char*>(webAsset),sizeof webAsset); });
+    server.on("/",HTTP_GET,[]{ String etag=String('"')+webAssetEtag+'"'; server.sendHeader("ETag",etag); server.sendHeader("Cache-Control","public, max-age=300, stale-while-revalidate=86400"); if(server.header("If-None-Match")==etag) { server.send(304); return; } server.sendHeader("Content-Encoding","gzip"); server.send_P(200,"text/html",reinterpret_cast<const char*>(webAsset),sizeof webAsset); });
     server.on("/boot.ipxe",HTTP_GET,[]{
         int target=locked?-1:state.dispatch(millis()); String script="#!ipxe\n";
         if(target>=0) { script+="imgexec RemoteBoot.efi boot="+idText(target); if(state.valid(state.fallback)&&state.fallback!=target) script+=" fallback="+idText(state.fallback); script+=" || goto failed\nexit\n:failed\necho RemoteBoot failed\nexit 1\n"; }
@@ -189,7 +184,7 @@ void routes() {
     server.on("/api/v1/bootstrap",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; rb::redactConfig(config,d["config"].to<JsonObject>()); appendStatus(d["status"].to<JsonObject>()); jsonReply(200,d); });
     server.on("/api/v1/config",HTTP_PUT,[]{ if(!auth()) return; if(locked) { errorReply(409,"SCHEMA_LOCKED"); return; }
         JsonDocument patch,next; if(!body(patch)) return; next.set(config);
-        const char* allowed="|ssid|wifi_password|admin_token|agent_token|pc_name|mac|dhcp|ip|subnet|gateway|dns|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|sinric_enabled|sinric_app_key|sinric_app_secret|sinric_slots|systems|";
+        const char* allowed="|admin_token|agent_token|pc_name|mac|dhcp|ip|subnet|gateway|dns|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|sinric_enabled|sinric_app_key|sinric_app_secret|sinric_slots|systems|";
         for(JsonPair p:patch.as<JsonObject>()) { if(!strstr(allowed,(String("|")+p.key().c_str()+"|").c_str())) { errorReply(400,"UNKNOWN_FIELD"); return; } next[p.key()]=p.value(); }
         if(rb::sinricReadiness(next["sinric_enabled"].as<bool>(),next["sinric_app_key"]|"",next["sinric_app_secret"]|"")==rb::SinricReadiness::MissingCredentials) { errorReply(400,"SINRIC_CREDENTIALS_REQUIRED"); return; }
         if(!validate(next)) { errorReply(400,"INVALID_CONFIG"); return; }
@@ -365,25 +360,27 @@ void setup() {
     }
     state.lastSelected=nvs.getInt("last",-1); reloadState();
     WiFi.persistent(false); WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setAutoReconnect(true);
-    if(stored.length()&&!locked) {
-        if(!config["dhcp"].as<bool>()) { IPAddress ip,mask,gateway,resolver; ip.fromString(config["ip"].as<const char*>()); mask.fromString(config["subnet"].as<const char*>()); gateway.fromString(config["gateway"].as<const char*>()); resolver.fromString(config["dns"].as<const char*>()); WiFi.config(ip,gateway,mask,resolver); }
-        connectWiFi(config["ssid"].as<const char*>(),config["wifi_password"]|"");
-    } else if(strlen(REMOTE_BOOT_LOCAL_WIFI_SSID)) {
+    if(!hasLocalWiFi()) {
+        locked=true; logEvent("LOCAL_WIFI_REQUIRED");
+    } else {
         config["ssid"]=REMOTE_BOOT_LOCAL_WIFI_SSID;
         config["wifi_password"]=REMOTE_BOOT_LOCAL_WIFI_PASSWORD;
-        setupMode=true; setupKey=randomToken();
-        if(connectWiFi(config["ssid"].as<const char*>(),config["wifi_password"].as<const char*>())) {
-            Serial.println("Local Wi-Fi connected: "+WiFi.localIP().toString());
-            Serial.println("Setup dashboard token: "+setupKey);
-            logEvent("LOCAL_WIFI_CONNECTED");
-        } else Serial.println("Local Wi-Fi connection failed; starting recovery AP.");
+        if(!stored.length()) {
+            setupMode=true; setupKey=randomSetupCredential();
+            Serial.println("Setup dashboard password: "+setupKey);
+            logEvent("SETUP_WIFI_WAIT");
+        }
+        if(!config["dhcp"].as<bool>()) { IPAddress ip,mask,gateway,resolver; ip.fromString(config["ip"].as<const char*>()); mask.fromString(config["subnet"].as<const char*>()); gateway.fromString(config["gateway"].as<const char*>()); resolver.fromString(config["dns"].as<const char*>()); WiFi.config(ip,gateway,mask,resolver); }
+        wifiReconnect.reset(millis());
+        startWiFiAttempt();
     }
-    if(WiFi.status()!=WL_CONNECTED) setupAP();
     routes(); startAgentSocket(); startSinric(); microlink.begin(locked,setupMode,WiFi.status()==WL_CONNECTED); logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
 }
 void loop() {
     if(sinricStarted && microlink.beginSinricHandle(sinricOnline)) { SinricPro.handle(); microlink.endSinricHandle(sinricOnline,[]{ SinricPro.stop(); SinricPro.begin(config["sinric_app_key"].as<const char*>(),config["sinric_app_secret"].as<const char*>()); }); for(int i=0;i<8;++i) if(rb::sinricResetDue(slotReset[i],millis())) { SinricProSwitch& d=SinricPro[slotIds[i]]; slotReset[i]=rb::nextSinricReset(millis(),d.sendPowerStateEvent(false)); } }
-    server.handleClient(); agentSocketTick(); if(setupNetwork.shouldProcessDns()) dns.processNextRequest(); wolTick(); microlink.tick(WiFi.status()==WL_CONNECTED);
-    if(setupNetwork.shouldStartRecoveryAp(WiFi.status()==WL_CONNECTED,millis())) setupAP();
+    const bool wifiConnected=WiFi.status()==WL_CONNECTED;
+    wifiReconnect.observe(wifiConnected,millis());
+    if(wifiReconnect.due(millis())) startWiFiAttempt();
+    server.handleClient(); agentSocketTick(); wolTick(); microlink.tick(wifiConnected);
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0) ESP.restart(); delay(1);
 }
