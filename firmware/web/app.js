@@ -1,4 +1,7 @@
 'use strict';
+function validateCredential(value){
+  return typeof value==='string'&&value.length>=8&&value.length<=128&&!/[\x00-\x1f\x7f]/.test(value);
+}
 function validateSinric(input){
   const errors={},warnings={};
   const enabled=!!input.enabled;
@@ -46,14 +49,14 @@ function createStatusPoller({poll,isHidden}){
   return {tick,visibilityChanged:()=>{if(!isHidden())tick()}}
 }
 function statusControls(state){return {shutdownDisabled:!state.shutdown_enabled}}
-globalThis.RemoteBootValidation={validateSinric,formatTailscaleStatus,createStatusPoller,statusControls};
+globalThis.RemoteBootValidation={validateCredential,validateSinric,formatTailscaleStatus,createStatusPoller,statusControls};
 if(typeof document!=='undefined'){
 const $=id=>document.getElementById(id);
 let token='',cfg={},systems=[],slots=[],refreshTimer,statusPoller,statusRequest;
 const pageNames={overview:'Visão geral',boot:'Boot',settings:'Configuração',sinric:'Sinric Pro',system:'Sistema'};
 const fields=[
-  ['Rede','Conexão do ESP32 com a rede local',[
-    ['ssid','SSID'],['wifi_password','Senha Wi-Fi','password'],['dhcp','Usar DHCP','checkbox'],
+  ['Rede','Wi-Fi definido manualmente em config.local.json',[
+    ['dhcp','Usar DHCP','checkbox'],
     ['ip','IP estático'],['subnet','Máscara de sub-rede'],['gateway','Gateway'],['dns','DNS']]],
   ['PC','Wake-on-LAN e identificação do computador',[
     ['pc_name','Nome do PC'],['mac','MAC Ethernet'],['wol_port','Porta WoL','number'],
@@ -61,8 +64,8 @@ const fields=[
   ['Boot','Comportamento padrão de inicialização',[
     ['default_target','Sistema padrão','target'],['fallback_boot_id','Fallback','target'],
     ['pending_ttl_s','Validade da seleção (segundos)','number'],['physical_boot_behavior','Botão físico do PC','behavior']]],
-  ['Acesso','Tokens locais de administração e agent',[
-    ['admin_token','Novo token administrativo','password'],['agent_token','Novo token do agent','password']]]
+  ['Acesso','Senhas de administração e agent (8–128 caracteres)',[
+    ['admin_token','Nova senha administrativa','password'],['agent_token','Nova senha do agent','password']]]
 ];
 
 function icon(name){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#icon-'+name);svg.append(use);return svg}
@@ -187,7 +190,7 @@ function updateStatusCards(state){
 }
 function applyStatus(state){
   $('shutdown').disabled=statusControls(state).shutdownDisabled;updateStatusCards(state);
-  $('setupInfo').textContent=state.config_locked?'Configuração preservada, porém incompatível ou corrompida.':state.setup_mode?'Configure Wi-Fi, MAC e dois tokens diferentes para concluir.':'Campos de senha vazios mantêm os valores existentes.'
+  $('setupInfo').textContent=state.config_locked?'Configuração preservada, porém incompatível ou corrompida.':state.setup_mode?'Configure MAC e duas senhas diferentes para concluir.':'Campos de senha vazios mantêm os valores existentes.'
 }
 function status(){
   if(statusRequest)return statusRequest;
@@ -197,7 +200,7 @@ function status(){
 async function connect(){
   token=$('token').value.trim();$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
   try{
-    const initial=await api('bootstrap');cfg=initial.config;systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();applyStatus(initial.status);clearInterval(refreshTimer);statusPoller=createStatusPoller({poll:()=>status().catch(error=>showToast(error.message,true)),isHidden:()=>document.hidden});refreshTimer=setInterval(statusPoller.tick,10000);showToast('Dashboard conectada.')
+    const initial=await api('bootstrap');cfg=initial.config;systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();applyStatus(initial.status);clearInterval(refreshTimer);statusPoller=createStatusPoller({poll:()=>status().catch(error=>showToast(error.message,true)),isHidden:()=>document.hidden});refreshTimer=setInterval(statusPoller.tick,15000);showToast('Dashboard conectada.')
   }catch(error){$('loginError').textContent=error.message;$('loginError').hidden=false}
   finally{setBusy($('connect'),false)}
 }
@@ -225,6 +228,10 @@ $('showHidden').onchange=renderButtons;
 $('addSlot').onclick=()=>{if(slots.length<8){slots.push({device_id:'',boot_id:'default'});renderSlots()}else showToast('O limite é de 8 dispositivos.',true)};
 $('settings').onsubmit=async event=>{
   event.preventDefault();
+  const credentialErrors={};
+  for(const key of ['admin_token','agent_token']){const value=$('f_'+key).value;if(value&&!validateCredential(value))credentialErrors[key]='Use de 8 a 128 caracteres sem caracteres de controle.'}
+  if($('f_admin_token').value&&$('f_agent_token').value&&$('f_admin_token').value===$('f_agent_token').value)credentialErrors.agent_token='A senha do agent deve ser diferente da administrativa.';
+  if(Object.keys(credentialErrors).length){showFieldErrors(credentialErrors);showToast('Revise as senhas antes de salvar.',true);setActiveView('settings');return}
   const validation=validateSinric({enabled:$('f_sinric_enabled').checked,appKey:$('f_sinric_app_key').value,appKeySet:!!cfg.sinric_app_key_set,appSecret:$('f_sinric_app_secret').value,appSecretSet:!!cfg.sinric_app_secret_set,slots,validBootIds:systems.filter(entry=>!entry.blocked).map(entry=>entry.id)});
   if(!validation.valid){showFieldErrors(validation.errors);showToast('Revise a configuração do Sinric antes de salvar.',true);setActiveView('sinric');return}
   clearFieldErrors();slots=validation.slots;renderSlots();
