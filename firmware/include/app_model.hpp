@@ -13,6 +13,7 @@
 #include "sinric_policy.hpp"
 #include "microlink_runtime.hpp"
 #include "config_store.hpp"
+#include "document_transaction.hpp"
 #include "local_wifi.h"
 #include "web_asset.h"
 
@@ -24,7 +25,7 @@ bool locked=false,setupMode=true,sinricOnline=false,sinricStarted=false,wifiAddr
 uint32_t restartAt=0,logIndex=0;String logs[32],slotIds[8];uint32_t slotReset[8]{};
 struct PcRuntime {
     String id,session,agentId,hostname,os,sentCommand,acceptedCommand;
-    rb::State state;rb::PowerCommand power;
+    rb::PcState state;rb::PowerCommand power;
     int socket=-1;bool reboot=false,shutdown=false,wolSent=false;
     uint32_t lastWol=0,wolAt=0,discovery=1,sentDiscovery=0,sentAt=0,acceptedAt=0;
     uint8_t wolRemaining=0;
@@ -93,7 +94,7 @@ bool validatePc(JsonObject pc) {
     return true;
 }
 bool validate(JsonDocument& doc) {
-    if(doc["config_version"].as<int>()!=3||!rb::validCredential(doc["admin_token"].as<const char*>())) return false;
+    if(doc.overflowed()||doc["config_version"].as<int>()!=3||!rb::validCredential(doc["admin_token"].as<const char*>())) return false;
     if(!doc["dhcp"].as<bool>()) { IPAddress address;for(const char* k:{"ip","subnet","gateway","dns"}) if(!address.fromString(doc[k]|"")) return false; }
     const char* key=doc["tailscale_auth_key"]|"";
     if(strlen(key)>159||(*key&&(strncmp(key,"tskey-auth-",11)||strlen(key)<20))||strlen(doc["tailscale_device_name"]|"")>63) return false;
@@ -120,17 +121,24 @@ void reloadStates() {
         String id=settings["pc_id"]|"";PcRuntime* pc=runtime(id);
         if(!pc) for(auto& free:pcs) if(!free.id.length()) { pc=&free;pc->id=id;break; }
         if(!pc) continue;
-        pc->state.count=0;for(JsonObject e:settings["systems"].as<JsonArray>()) { auto& dest=pc->state.entries[pc->state.count++];dest.id=idValue(e["id"]);strlcpy(dest.name,e["name"]|"",sizeof dest.name);dest.hidden=e["hidden"]|false;dest.blocked=e["blocked"]|false; }
+        pc->state.count=0;for(JsonObject e:settings["systems"].as<JsonArray>()) { auto& dest=pc->state.entries[pc->state.count++];dest.id=idValue(e["id"]);dest.hidden=e["hidden"]|false;dest.blocked=e["blocked"]|false; }
         pc->state.defaultTarget=idValue(settings["default_target"]);pc->state.fallback=idValue(settings["fallback_boot_id"]);pc->state.ttl=settings["pending_ttl_s"].as<uint32_t>()*1000;
         pc->state.lastSelected=idValue(settings["last_selected_target"]);
-        String b=settings["physical_boot_behavior"]|"default_target";pc->state.behavior=b=="last_selected"?rb::State::Last:b=="exit_to_firmware"?rb::State::Exit:rb::State::Default;pc->state.reconcile();pc->state.heartbeatExpiry=90000;
+        String b=settings["physical_boot_behavior"]|"default_target";pc->state.behavior=b=="last_selected"?rb::PcState::Last:b=="exit_to_firmware"?rb::PcState::Exit:rb::PcState::Default;pc->state.reconcile();pc->state.heartbeatExpiry=90000;
     }
 }
-bool commit(JsonDocument& next) {
+void restoreConfig(JsonDocument& live) {
+    if(!store.load(live)||!validate(live)){locked=true;logEvent("CONFIG_ROLLBACK_FAILED");return;}
+    reloadStates();
+}
+class ConfigTransaction:public rb::DocumentTransaction<JsonDocument> {
+public:ConfigTransaction():DocumentTransaction(config,restoreConfig){}
+};
+bool commit(ConfigTransaction& next) {
     if(locked) { errorReply(409,"SCHEMA_LOCKED");return false; }
     if(!validate(next)) { errorReply(400,"INVALID_CONFIG");return false; }
     if(!store.save(next)) { errorReply(500,"NVS_WRITE_FAILED");return false; }
-    config.set(next);reloadStates();return true;
+    next.accept();reloadStates();return true;
 }
 bool patchAllowed(JsonObject input,JsonObject destination,const char* allowed) {
     for(JsonPair p:input) { if(!strstr(allowed,(String("|")+p.key().c_str()+"|").c_str())) { errorReply(400,"UNKNOWN_FIELD");return false; }destination[p.key()]=p.value(); }return true;
@@ -149,19 +157,20 @@ void appendStatus(JsonObject d) {
     t["map_updates"]=tail.mapUpdates;t["reconnects"]=tail.reconnects;t["tls_deferred"]=tail.tlsDeferred;t["wg_encrypted_rx"]=tail.encryptedRx;t["wg_authenticated_rx"]=tail.authenticatedRx;t["authenticated_age_ms"]=tail.authenticatedAgeMs;t["heap_free"]=tail.heapFree;t["heap_minimum"]=tail.heapMinimum;t["largest_block"]=tail.largestBlock;
 }
 void appendAgents(JsonArray arr) {for(JsonObject a:config["agents"].as<JsonArray>()) {JsonObject out=arr.add<JsonObject>();for(const char* k:{"agent_id","pc_id","installation_name","hostname","os"})out[k]=a[k];PcRuntime* pc=runtime(a["pc_id"]|"");bool online=pc&&pc->agentId==String(a["agent_id"]|"")&&pc->state.online(millis());AgentPresence* last=presence(a["agent_id"]|"");out["online"]=online;out["connected"]=online;out["id"]=a["agent_id"];out["last_seen"]=last&&last->seen?String(uint32_t(millis()-last->seen)/1000)+" s atrás (desde o reinício da ESP)":String("");out["permissions"]["reboot"]=last&&last->reboot;out["permissions"]["shutdown"]=last&&last->shutdown;}}
+void copyPcMetadata(JsonObject out,JsonObjectConst pc) {for(JsonPairConst value:pc)if(strcmp(value.key().c_str(),"systems"))out[value.key().c_str()]=value.value();}
 void bootstrap() {
     JsonDocument doc;JsonObject globals=doc["config"].to<JsonObject>();
     for(JsonPair p:config.as<JsonObject>()) { String key=p.key().c_str();if(key=="pcs"||key=="agents") continue;if(key=="admin_token"||key=="tailscale_auth_key"||key=="sinric_app_key"||key=="sinric_app_secret") globals[key+"_set"]=strlen(p.value().as<const char*>()?p.value().as<const char*>():"")>0;else globals[key]=p.value(); }
     globals["ssid"]=REMOTE_BOOT_LOCAL_WIFI_SSID;globals["wifi_password_set"]=strlen(REMOTE_BOOT_LOCAL_WIFI_PASSWORD)>0;
-    JsonArray list=doc["pcs"].to<JsonArray>();for(JsonObject pc:config["pcs"].as<JsonArray>()) { JsonObject out=list.add<JsonObject>();out.set(pc);out.remove("systems");out["systems_count"]=pc["systems"].size();PcRuntime* r=runtime(pc["pc_id"]|"");if(r) appendPcStatus(*r,out["status"].to<JsonObject>()); }
+    JsonArray list=doc["pcs"].to<JsonArray>();for(JsonObject pc:config["pcs"].as<JsonArray>()) { JsonObject out=list.add<JsonObject>();copyPcMetadata(out,pc);out["systems_count"]=pc["systems"].size();PcRuntime* r=runtime(pc["pc_id"]|"");if(r) appendPcStatus(*r,out["status"].to<JsonObject>()); }
     appendAgents(doc["agents"].to<JsonArray>());appendStatus(doc["status"].to<JsonObject>());jsonReply(200,doc);
 }
 int requestBoot(PcRuntime& pc,int target,bool force) {
     if(locked||setupMode||WiFi.status()!=WL_CONNECTED) return 503;
     if(pc.wolRemaining||(pc.wolSent&&uint32_t(millis()-pc.lastWol)<3000)) return 429;
     if(!pc.state.valid(target)) return 400;if(pc.state.online(millis())&&!force) return 409;
-    JsonDocument next;next.set(config);findPc(next,pc.id)["last_selected_target"]=idText(target);
-    if(!store.save(next)) return 500;config.set(next);pc.state.request(target,millis(),force);
+    ConfigTransaction next;next.take();findPc(next,pc.id)["last_selected_target"]=idText(target);
+    if(!validate(next)||!store.save(next)) return 500;next.accept();pc.state.request(target,millis(),force);
     pc.wolRemaining=findPc(config,pc.id)["wol_repeat"];pc.wolAt=millis();logEvent("BOOT_QUEUED");return 202;
 }
 int requestPower(PcRuntime& pc,const String& action,int target=-1) {

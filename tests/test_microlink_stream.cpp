@@ -35,6 +35,28 @@ int main() {
         assert(r.header[8]==5 && std::memcmp(r.payload,"{}",2)==0);
         ml_frame_reset(&r);
     }
+    // A full 22KB map must assemble with caller-owned storage, without a
+    // second heap copy. Reset must not free that storage, including failures.
+    unsigned char storage[32769]{};
+    unsigned char body[22942]; std::memset(body, 'x', sizeof body);
+    const unsigned char map_header[] = {0x9e,0x59,0,0};
+    assert(ml_frame_feed_buffer(&r,ML_FRAME_MAP,map_header,4,&used,32768,storage,sizeof storage)==0);
+    assert(r.payload==storage && r.payload_borrowed);
+    for(size_t pos=0; pos<sizeof body;) {
+        size_t size=sizeof body-pos; if(size>1024) size=1024;
+        int rc=ml_frame_feed_buffer(&r,ML_FRAME_MAP,body+pos,size,&used,32768,storage,sizeof storage);
+        assert(used==size); pos+=used;
+        assert(rc==(pos==sizeof body?1:0));
+    }
+    assert(r.length==sizeof body && storage[sizeof body]==0);
+    ml_frame_reset(&r);
+    storage[0]=42; assert(storage[0]==42 && !r.payload);
+    assert(ml_frame_feed_buffer(&r,ML_FRAME_MAP,map_header,4,&used,32768,storage,22942)==-1);
+    ml_frame_reset(&r);
+    const unsigned char max_header[]={0,128,0,0};
+    assert(ml_frame_feed_buffer(&r,ML_FRAME_MAP,max_header,4,&used,32768,storage,sizeof storage)==0);
+    assert(r.length==32768 && storage[32768]==0);
+    ml_frame_reset(&r);
     assert(ml_receive_result(0,EAGAIN)==-1);
     assert(ml_receive_result(-1,EAGAIN)==0);
     assert(ml_receive_result(-1,ECONNRESET)==-1);

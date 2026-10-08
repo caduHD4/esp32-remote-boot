@@ -53,10 +53,10 @@ void pairingRoute(const String& id,const String& action) {
     if(server.method()!=HTTP_POST||action!="approve") { errorReply(405,"METHOD_NOT_ALLOWED");return; }
     if(!pair->active(millis())) { errorReply(409,"PAIRING_EXPIRED");return; }
     if(pair->agentId.length()) { savedReply();return; }
-    JsonDocument input,next;if(!body(input))return;String pcId=input["pc_id"]|"",name=input["installation_name"]|"";
+    JsonDocument input;ConfigTransaction next;if(!body(input))return;String pcId=input["pc_id"]|"",name=input["installation_name"]|"";
     if(findPc(config,pcId).isNull()||!name.length()||name.length()>63) { errorReply(400,"INVALID_PAIRING_TARGET");return; }
     if(config["agents"].size()>=rb::MaxAgents) { errorReply(409,"AGENT_CAPACITY");return; }
-    String agentId=randomHex(),token=randomHex(32);next.set(config);JsonObject agent=next["agents"].as<JsonArray>().add<JsonObject>();
+    String agentId=randomHex(),token=randomHex(32);next.take();JsonObject agent=next["agents"].as<JsonArray>().add<JsonObject>();
     agent["agent_id"]=agentId;agent["pc_id"]=pcId;agent["token"]=token;agent["hostname"]=pair->hostname;agent["os"]=pair->os;agent["installation_name"]=name;
     if(!commit(next))return;
     pair->agentId=agentId;pair->pcId=pcId;pair->token=token;logEvent("AGENT_PAIRED");savedReply();

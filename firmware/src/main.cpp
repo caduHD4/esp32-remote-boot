@@ -25,7 +25,7 @@ void startSinric() {
 void setup() {
     Serial.begin(115200);delay(300);defaults(config);
     if(!nvs.begin("remote-boot-v3",false))locked=true;
-    if(store.exists()) { JsonDocument loaded;if(!store.load(loaded)||!validate(loaded))locked=true;else {config.set(loaded);setupMode=false;} }
+    if(store.exists()) { JsonDocument loaded;if(!store.load(loaded)||!validate(loaded))locked=true;else {swap(config,loaded);setupMode=false;} }
     reloadStates();WiFi.persistent(false);WiFi.mode(WIFI_STA);WiFi.setSleep(false);WiFi.setAutoReconnect(true);
     if(!strlen(REMOTE_BOOT_LOCAL_WIFI_SSID)) {locked=true;logEvent("LOCAL_WIFI_REQUIRED");}
     else {

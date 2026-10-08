@@ -10,6 +10,8 @@ Base: 01c9cce; branch: feat/multi-pc-agent-pairing
 
 Implementation complete in all owners. Dedicated feature branch; shared checkout with explicit ownership. Native/EFI and two independent firmware/API reviews performed; actionable findings corrected. No real host shutdown/reboot/EFI mutations in automated tests.
 
-Verified: 13 portable C++ executables including real ConfigStore fault injection; Native loopback/FakeHost and installer fixtures; EFI helper fixtures; both firmware variants compile; ESP USB upload at0x20000 with read-back hash. UI204/204 passed, expanded264-case final run underway.
+Verified: 13 portable C++ executables plus document ownership tests, including actual ConfigStore fault injection and an 18KB real-ArduinoJson transaction test; Native loopback/FakeHost and installer fixtures; EFI helper fixtures; both firmware variants compile; ESP USB upload at0x20000 with read-back hash. UI276/276 passed; GitHub CI and Windows/Linux NativeAOT passed at33467c5.
 
 In progress: actual ESP four-client integration/capacity tests, MicroLink persistence, GitHub CI/NativeAOT binaries and release. Final upload will embed frozen dashboard source. Physical two-PC OS energy/UEFI operations and long soak require dedicated hardware; do not infer them from simulated clients.
+
+Hardware diagnostics found two memory faults: duplicate long-poll map storage/DOM caused control reconnects; a full-snapshot new(nothrow) allocation still aborted with ESP-IDF exceptions disabled. Fixes: shared bounded map workspace/selective delta parser, dynamic TLS record buffers with unchanged guards, ownership-based API transactions with durable rollback, and 512-byte streamed NVS banks. Targeted portable, actual ArduinoJson, CRC/fault and parser tests passed; final hardware load run remains pending.

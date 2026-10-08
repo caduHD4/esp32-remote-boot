@@ -24,6 +24,7 @@
 #include "microlink_internal.h"
 #include "ml_io_policy.h"
 #include "ml_json_scan.h"
+#include "ml_register_scratch.h"
 #include "x25519.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -48,7 +49,9 @@ static bool s_has_node_key_challenge = false;
 
 /* The ESP32-C3 has no PSRAM. Keep this buffer in BSS so reconnects do not
  * depend on finding a fresh 32KB contiguous heap block after TLS/cJSON work. */
-static uint8_t s_map_response_buffer[ML_H2_BUFFER_SIZE];
+static uint8_t s_map_response_buffer[ML_H2_BUFFER_SIZE + 1];
+_Static_assert(ML_H2_BUFFER_SIZE >= ML_REGISTER_SHARED_MIN_CAPACITY,
+               "Coord scratch requires at least 32 KiB for registration slices");
 
 /* Coordination state machine */
 typedef enum {
@@ -802,12 +805,13 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
 
     /* Read RegisterResponse - accumulate all Noise frames into H2 buffer first,
      * then parse H2 frames (same pattern as MapResponse). */
-    uint8_t *h2_resp = ml_psram_malloc(16384);
-    if (!h2_resp) return -1;
+    ml_register_workspace workspace;
+    if (!ml_register_workspace_init(&workspace, s_map_response_buffer,
+                                    sizeof(s_map_response_buffer))) return -1;
+    uint8_t *h2_resp = workspace.h2;
     size_t h2_resp_len = 0;
 
-    uint8_t *resp_buf = ml_psram_malloc(8192);
-    if (!resp_buf) { free(h2_resp); return -1; }
+    uint8_t *resp_buf = workspace.response;
     size_t resp_total = 0;
 
     /* Accumulate Noise frames into H2 buffer.
@@ -815,12 +819,10 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
      * instead of blocking 60s waiting for more data that won't come. */
     bool got_register_end = false;
     for (int frame_count = 0; frame_count < 10 && !got_register_end; frame_count++) {
-        uint8_t *frame_buf = ml_psram_malloc(4096);
-        if (!frame_buf) break;
+        uint8_t *frame_buf = workspace.frame;
 
         int frame_len = noise_recv(ml, noise, frame_buf, 4096);
         if (frame_len <= 0) {
-            free(frame_buf);
             break;
         }
 
@@ -830,7 +832,6 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
             memcpy(h2_resp + h2_resp_len, frame_buf, frame_len);
             h2_resp_len += frame_len;
         }
-        free(frame_buf);
 
         /* Scan accumulated buffer for H2 END_STREAM on stream 1 */
         int scan = 0;
@@ -884,7 +885,6 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
 
         fpos += f_len;
     }
-    free(h2_resp);
 
     /* Send connection-level WINDOW_UPDATE for RegisterResponse.
      * Stream 1 is closed (END_STREAM received), only update connection level. */
@@ -898,7 +898,6 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
 
     if (resp_total == 0) {
         ESP_LOGW(TAG, "No DATA frame in RegisterResponse");
-        free(resp_buf);
         /* Not fatal - server may just return headers-only 200 */
         return 0;
     }
@@ -933,7 +932,6 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
         parse_len -= json_offset;
     } else if (json_offset < 0) {
         ESP_LOGW(TAG, "No '{' found in RegisterResponse data");
-        free(resp_buf);
         return 0;
     }
 
@@ -946,11 +944,9 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
         ESP_LOGW(TAG, "Failed to parse RegisterResponse JSON (len=%d)", (int)parse_len);
         ESP_LOGW(TAG, "First 100 chars: %.100s", parse_start);
         parse_start[parse_len] = saved;
-        free(resp_buf);
         return 0;  /* Not fatal - we'll get peers in MapResponse */
     }
     parse_start[parse_len] = saved;
-    free(resp_buf);
 
     /* Extract our VPN IP from Node.Addresses */
     cJSON *node = cJSON_GetObjectItem(resp_json, "Node");
@@ -2200,40 +2196,74 @@ static int do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *noise) {
 }
 
 /* Feed complete DATA bodies into the length-prefixed MapResponse stream. */
+/* Keep the transport's shared scratch across long-poll fragments. Parse only
+ * consumed fields: DERPMap and rich unused metadata must never become a DOM. */
+static int parse_map_delta(microlink_t *ml, ml_json_slice_t root) {
+    if (!ml_json_object_valid(root)) return -1;
+    ml_json_slice_t node, addresses, address;
+    size_t cursor = 0;
+    char addr[64];
+    if (ml_json_object_get(root, "Node", &node) &&
+        ml_json_object_get(node, "Addresses", &addresses) &&
+        ml_json_array_next(addresses, &cursor, &address) &&
+        slice_string(address, addr, sizeof(addr))) {
+        unsigned a, b, c, d;
+        if (sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+            uint32_t ip = (a << 24) | (b << 16) | (c << 8) | d;
+            if (ip != ml->vpn_ip) {
+                ml->vpn_ip = ip;
+                ESP_LOGI(TAG, "VPN IP updated via long-poll");
+            }
+        }
+    }
+    const char *fields[] = {"Peers", "PeersChanged", "peers", "PeersRemoved", "PeersChangedPatch"};
+    bool peers_found = false;
+    for (size_t i = 0; i < sizeof(fields)/sizeof(fields[0]); ++i) {
+        ml_json_slice_t field;
+        if (i < 3 && peers_found) continue;
+        if (!ml_json_object_get(root, fields[i], &field)) continue;
+        if (i < 3) peers_found = true;
+        /* Array entries are independent; retain at most one peer DOM. Patches
+         * retain their original object representation and update semantics. */
+        cursor = 0;
+        ml_json_slice_t item = field;
+        bool array = field.len && field.ptr[0] == '[';
+        while (!array || ml_json_array_next(field, &cursor, &item)) {
+            cJSON *value = cJSON_ParseWithLength(item.ptr, item.len);
+            cJSON *wrapper = cJSON_CreateObject();
+            cJSON *container = array ? cJSON_CreateArray() : value;
+            if (!value || !wrapper || !container) {
+                if (array) cJSON_Delete(container);
+                cJSON_Delete(value); cJSON_Delete(wrapper);
+                ESP_LOGW(TAG, "Map delta field allocation/parse failed: %s", fields[i]);
+                return -1;
+            }
+            if (array) cJSON_AddItemToArray(container, value);
+            cJSON_AddItemToObjectCS(wrapper, fields[i], container);
+            parse_peers_from_map_response(ml, wrapper);
+            cJSON_Delete(wrapper);
+            if (!array) break;
+        }
+    }
+    return 0;
+}
+
 static int consume_map_data(microlink_t *ml, const uint8_t *data, size_t len) {
     while (len) {
         size_t used = 0;
-        int ready = ml_frame_feed(&ml->map_rx, ML_FRAME_MAP, data, len, &used, 32768);
+        int ready = ml_frame_feed_buffer(&ml->map_rx, ML_FRAME_MAP, data, len, &used,
+            ML_H2_BUFFER_SIZE, s_map_response_buffer, sizeof(s_map_response_buffer));
         data += used; len -= used;
-        if (ready < 0) return -1;
+        if (ready < 0) {
+            ESP_LOGW(TAG, "Long-poll map frame rejected: %u bytes", (unsigned)ml->map_rx.length);
+            return -1;
+        }
         if (!ready) return 0;
-        cJSON *update_json = cJSON_ParseWithLengthOpts((char *)ml->map_rx.payload, ml->map_rx.length + 1, NULL, true);
-        if (!cJSON_IsObject(update_json)) {
-            cJSON_Delete(update_json);
-            return -1; // Never silently discard a malformed or unsupported update.
+        ml_json_slice_t update = {(char *)ml->map_rx.payload, ml->map_rx.length};
+        if (parse_map_delta(ml, update) < 0) {
+            ESP_LOGW(TAG, "Long-poll map parse failed (%u bytes)", (unsigned)update.len);
+            return -1;
         }
-        /* Update VPN IP if present */
-        cJSON *node = cJSON_GetObjectItem(update_json, "Node");
-        if (node) {
-            cJSON *addresses = cJSON_GetObjectItem(node, "Addresses");
-            if (addresses && cJSON_GetArraySize(addresses) > 0) {
-                const char *addr = cJSON_GetArrayItem(addresses, 0)->valuestring;
-                if (addr) {
-                    unsigned a, b, c, d;
-                    if (sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
-                        uint32_t new_ip = (a << 24) | (b << 16) | (c << 8) | d;
-                        if (new_ip != ml->vpn_ip) {
-                            ml->vpn_ip = new_ip;
-                            ESP_LOGI(TAG, "VPN IP updated via long-poll");
-                        }
-                    }
-                }
-            }
-        }
-
-        /* Parse peer updates */
-        parse_peers_from_map_response(ml, update_json);
-        cJSON_Delete(update_json);
         __atomic_store_n(&ml->diagnostics.control_online, 1, __ATOMIC_RELAXED);
         __atomic_add_fetch(&ml->diagnostics.map_updates, 1, __ATOMIC_RELAXED);
         ml_frame_reset(&ml->map_rx);
@@ -2246,7 +2276,10 @@ static int consume_h2_frame(microlink_t *ml, ml_noise_state_t *noise) {
     uint8_t type = r->header[3], flags = r->header[4];
     uint32_t stream = ((uint32_t)(r->header[5]&127)<<24) |
         ((uint32_t)r->header[6]<<16) | ((uint32_t)r->header[7]<<8) | r->header[8];
-    if (ml_h2_stream_closed(type, flags, stream)) return -1;
+    if (ml_h2_stream_closed(type, flags, stream)) {
+        ESP_LOGW(TAG, "Long-poll H2 closed: type=%u flags=%u stream=%lu", type, flags, (unsigned long)stream);
+        return -1;
+    }
     if (type == 0) {
         size_t offset = 0, length = r->length;
         if (flags & 8) { // HTTP/2 DATA padding counts toward flow control.
@@ -2296,10 +2329,16 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     if (!r->header_used) ml->coord_rx_started_ms = now;
     size_t used;
     int ready = ml_frame_feed(r,ML_FRAME_NOISE,chunk,n,&used,ML_NOISE_FRAME_BUFFER_SIZE);
-    if (ready <= 0) return ready;
+    if (ready <= 0) {
+        if (ready < 0) ESP_LOGW(TAG, "Long-poll Noise frame rejected: %u bytes", (unsigned)r->length);
+        return ready;
+    }
     size_t plain_len = r->length-16;
     uint8_t *plain = ml_psram_malloc(plain_len ? plain_len : 1);
-    if (!plain) return -1;
+    if (!plain) {
+        ESP_LOGW(TAG, "Long-poll plaintext allocation failed: %u bytes", (unsigned)plain_len);
+        return -1;
+    }
     if (ml_noise_decrypt(noise->rx_key,noise->rx_nonce,NULL,0,r->payload,r->length,plain) != ESP_OK) {
         free(plain); return -1;
     }
@@ -2309,6 +2348,7 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
     while (pos < plain_len) {
         ready = ml_frame_feed(&ml->h2_rx,ML_FRAME_H2,plain+pos,plain_len-pos,&used,32768);
         pos += used;
+        if (ready < 0) ESP_LOGW(TAG, "Long-poll H2 frame rejected: %u bytes", (unsigned)ml->h2_rx.length);
         if (ready < 0 || (ready > 0 && consume_h2_frame(ml,noise) < 0)) {
             free(plain); return -1;
         }

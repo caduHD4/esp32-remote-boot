@@ -12,17 +12,19 @@ typedef struct {
     uint8_t header[9];
     size_t header_used, length, used;
     uint8_t *payload;
+    bool payload_borrowed;
 } ml_frame_reader;
 
 static inline void ml_frame_reset(ml_frame_reader *r) {
-    free(r->payload);
+    if (!r->payload_borrowed) free(r->payload);
     memset(r, 0, sizeof(*r));
 }
 
 // Returns one complete frame, incomplete, or invalid/allocation failure.
 // Caller must reset after consuming a complete frame, and on disconnect.
-static inline int ml_frame_feed(ml_frame_reader *r, ml_frame_kind kind,
-        const uint8_t *data, size_t size, size_t *consumed, size_t maximum) {
+static inline int ml_frame_feed_buffer(ml_frame_reader *r, ml_frame_kind kind,
+        const uint8_t *data, size_t size, size_t *consumed, size_t maximum,
+        uint8_t *storage, size_t capacity) {
     size_t header_size = kind == ML_FRAME_DERP ? 5 : kind == ML_FRAME_H2 ? 9 :
                          kind == ML_FRAME_MAP ? 4 : 3;
     *consumed = 0;
@@ -37,7 +39,9 @@ static inline int ml_frame_feed(ml_frame_reader *r, ml_frame_kind kind,
                     ((uint32_t)h[1]<<8)|h[2];
         if (r->length > maximum || (kind == ML_FRAME_NOISE && (h[0] != 4 || r->length < 16)) ||
             (kind == ML_FRAME_MAP && r->length == 0)) return -1;
-        r->payload = (uint8_t *)malloc(r->length + 1);
+        if (storage && r->length >= capacity) return -1;
+        r->payload_borrowed = storage != NULL;
+        r->payload = storage ? storage : (uint8_t *)malloc(r->length + 1);
         if (!r->payload) return -1;
         r->payload[r->length] = 0; // Safe bounded JSON parsing without an OOB terminator.
     }
@@ -47,6 +51,11 @@ static inline int ml_frame_feed(ml_frame_reader *r, ml_frame_kind kind,
     r->used += n;
     *consumed += n;
     return r->used == r->length ? 1 : 0;
+}
+
+static inline int ml_frame_feed(ml_frame_reader *r, ml_frame_kind kind,
+        const uint8_t *data, size_t size, size_t *consumed, size_t maximum) {
+    return ml_frame_feed_buffer(r, kind, data, size, consumed, maximum, NULL, 0);
 }
 
 static inline int ml_receive_result(int n, int error_number) {

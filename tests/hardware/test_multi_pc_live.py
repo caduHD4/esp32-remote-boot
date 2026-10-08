@@ -85,7 +85,7 @@ def confirm(binding):
 
 def connect_agent(binding):
     host = urlparse(args.url).hostname
-    socket = connect(f"ws://{host}:81/agent/v2", subprotocols=["arduino"], open_timeout=8, close_timeout=1)
+    socket = connect(f"ws://{host}:81/agent/v2", subprotocols=["arduino"], open_timeout=8, close_timeout=1, legacy=True)
     session = secrets.token_hex(16)
     socket.send(json.dumps({"type": "hello", "protocol": 2, "agent_id": binding["agent_id"], "token": binding["token"], "session_id": session, "hostname": "FakeHost", "os": "Simulated", "boot_id": "0001", "permissions": {"reboot": True, "shutdown": True}}))
     ready = json.loads(socket.recv(timeout=6))
@@ -129,6 +129,7 @@ try:
         catalog = [{"id": f"{n+1:04X}", "name": f"PC{i+1} system {n+1} " + "x"*40, "hidden": False, "blocked": False} for n in range(24)]
         sync(bindings[-1], catalog)
         confirm(bindings[-1])
+        check(f"PC {i+1} catalog synchronized with 24 entries")
     fourth = start_pair()
     confirm(bindings[0])  # lost confirmation response after reuse of its pending slot
     bindings.append(approve_pair(fourth, created[3]))
@@ -148,6 +149,17 @@ try:
         assert page["total"] == 24 and len(page["systems"]) == 8 and page["systems"][0]["id"] == "0009"
     api(f"/api/v2/pcs/{created[0]}/systems?offset=0&limit=24", expected=400)
     check("versioned pagination and no full-catalog bypass")
+    catalog=[]
+    for offset in range(0,24,8):
+        catalog.extend(api(f"/api/v2/pcs/{created[0]}/systems?offset={offset}&limit=8")["systems"])
+    catalog[0]["hidden"]=True
+    api(f"/api/v2/pcs/{created[0]}/systems","PUT",{"systems":catalog})
+    before=api(f"/api/v2/pcs/{created[0]}/systems")
+    incoming=[{**entry,"hidden":False,"ignored":"x"*50} for entry in reversed(catalog)]
+    sync(bindings[0],incoming)
+    assert api(f"/api/v2/pcs/{created[0]}/systems")==before
+    sync(bindings[0],[{"id":"00af","name":"A"},{"id":"00AF","name":"B"}],expected=400)
+    check("catalog order/hidden preserved, unchanged generation and canonical duplicate IDs")
     prior = api(f"/api/v2/pcs/{created[1]}/systems")
     sync(bindings[0], [{"id": "0001", "name": "Only PC one"}], {"pc_id": created[1]})
     assert api(f"/api/v2/pcs/{created[1]}/systems") == prior
@@ -167,15 +179,28 @@ try:
     check("simulated shutdown ACK/result without OS actions")
     # Restore full capacity before the soak and persistent restart test.
     sync(bindings[0], [{"id": f"{n+1:04X}", "name": "PC1 capacity " + str(n+1) + "x"*40} for n in range(24)])
-    minimum_heap=2**32;minimum_largest=2**32
+    before=api(f"/api/v2/pcs/{created[0]}/systems")
+    api(f"/api/v2/pcs/{created[0]}","PUT",{"default_target":"FFFF"},expected=400)
+    saved_name=api(f"/api/v2/pcs/{created[0]}")["name"]
+    api(f"/api/v2/pcs/{created[0]}","PUT",{"name":"Must roll back","unknown_field":True},expected=400)
+    assert api(f"/api/v2/pcs/{created[0]}")["name"]==saved_name
+    assert api(f"/api/v2/pcs/{created[0]}/systems")==before
+    assert all(pc["status"]["online"] for pc in api("/api/v2/bootstrap")["pcs"])
+    check("invalid changes roll back durable configuration without disconnecting agents")
+    minimum_heap=2**32;minimum_largest=2**32;tailscale_samples=0;tailscale_expected=initial["status"]["tailscale"]["configured"]
     end=time.monotonic()+args.soak_seconds
     while time.monotonic()<end:
         status=api("/api/v2/status")
         minimum_heap=min(minimum_heap,status["heap"])
         minimum_largest=min(minimum_largest,status["tailscale"]["largest_block"])
+        if status["tailscale"]["control_online"] and status["tailscale"]["derp_online"]:
+            tailscale_samples+=1
         assert all(pc["status"]["online"] for pc in api("/api/v2/bootstrap")["pcs"])
         time.sleep(2)
     check(f"capacity soak {args.soak_seconds}s with 4 sockets and 96 entries")
+    if tailscale_expected:
+        assert tailscale_samples>=10,"Tailscale control and DERP must remain connected under capacity load"
+        check("Tailscale control and DERP online during full-capacity soak")
     assert args.soak_seconds>=61, "Rate-limit reset requires at least 61 seconds soak"
     for i,pc in enumerate(created):
         extra=approve_pair(start_pair(),pc)
