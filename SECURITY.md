@@ -1,17 +1,26 @@
 # Segurança
 
-Use somente numa LAN confiável. Dashboard/API usam Bearer token em HTTP, sem TLS: participantes com acesso ao tráfego podem capturar credenciais. Não exponha portas do ESP32 à internet. Sinric é a integração remota opcional.
+Use em uma LAN confiável. A dashboard e a API usam Bearer token sobre HTTP sem TLS; quem puder observar o tráfego pode capturar credenciais ou alterar respostas. Não encaminhe portas da ESP32 para a internet. Sinric é uma integração cloud opcional.
 
-- Token administrativo: leitura/configuração, WoL, reboot do PC, manutenção ESP32.
-- Token do agent: somente catálogo, sincronização e heartbeat/comandos. Proteja o arquivo local com ACL/root; quem obtiver esse token poderá falsificar status e catálogo.
-- `/boot.ipxe` e os assets da dashboard são públicos; não contêm credenciais. O script HTTP não é autenticado e sua substituição na rede é um risco de execução pré-boot. Secure Boot não é implementado por este projeto.
-- Setup AP usa senha aleatória mostrada no serial. Após perda de Wi-Fi, a configuração continua exigindo o token administrativo existente. Reiniciar não apaga credenciais.
-- NVS não é criptografada por este profile. Acesso físico à flash pode revelar credenciais.
-- Logs são 32 mensagens em RAM; não incluem tokens, nomes de SSID, MAC ou payloads HTTP.
-- Respostas de configuração omitem senhas, tokens, App Key e App Secret; retornam apenas flags de presença.
-- A API não libera CORS. Tokens ficam somente em memória na página, sem localStorage.
-- Restaurar exige token e `confirm=FACTORY_RESET`; schema desconhecido/corrompido é preservado e bloqueado.
-- Reboot do PC exige confirmação explícita na UI e habilitação local do agent. Não há download/execução arbitrária de comandos pelo agent.
-- O bloqueio de recursão UEFI usa nome, caminho iPXE/RemoteBoot e protocolo marcador na sessão. Um loader que chama código externo malicioso está fora desse limite de confiança.
+## Identidade e autorização
 
-O scanner simples de secrets é uma verificação complementar, não certificação de segurança. Antes de publicar, exclua configs locais, backups EFI, relatórios pessoais e binários gerados para sua máquina. Veja `.gitignore`.
+- O token admin autoriza configuração global, gerenciamento de PCs/pairing, ações de boot e reset. Mantenha-o fora de código e logs.
+- Não há token global de agent. Cada agent recebe um token aleatório próprio ao ser aprovado para um PC. O token permite sincronizar o catálogo vinculado e autenticar WebSocket; o servidor deriva o PC do vínculo e verifica `agent_id`, `pc_id` e `session_id`. Reutilizar credencial de outro PC não concede acesso ao seu estado.
+- O pareamento requer janela temporária aberta por admin e aprovação explícita associada a um PC. O código de usuário é curto e deve ser compartilhado apenas com quem está pareando; o segredo do dispositivo e token são credenciais. A entrega aprovada expira e o agent confirma a sessão após validar a configuração.
+- `/boot/{pc_id}.ipxe` é público para permitir boot pré-OS. O script iPXE e os assets da dashboard também são públicos. O endpoint pode despachar o target pendente desse PC, então uma máquina na LAN pode interferir com o fluxo de boot. O script é entregue por HTTP e pode ser substituído em trânsito; Secure Boot e verificação criptográfica do iPXE não são implementados.
+
+## Armazenamento e dados
+
+- Schema 3 guarda snapshots em `bank0`/`bank1` no namespace NVS `remote-boot-v3`; cada snapshot tem geração, tamanho e CRC32, e `commit` seleciona o banco válido mais recente. O limite serializado é 20.000 bytes. O CRC detecta corrupção, não autentica conteúdo.
+- NVS não é criptografada neste profile. Acesso físico à flash pode revelar Wi-Fi, credenciais Sinric, configuração de PCs e tokens dos agents. Proteja fisicamente o dispositivo e não compartilhe dumps de flash.
+- Respostas de configuração omitem senhas e tokens, App Key e App Secret, retornando apenas indicadores de presença. A UI mantém o token admin em memória e não usa `localStorage`. Logs são limitados a 32 mensagens em RAM e não devem incluir credenciais.
+- A API não libera CORS. Senhas de agent, token admin, tokens de agent e segredos Sinric não devem ser incluídos em commits, relatórios ou capturas.
+- Reset de fábrica exige autenticação admin e confirmação `FACTORY_RESET`; apaga a configuração gerenciada e reinicia a ESP32. Uma atualização comum de firmware não apaga NVS.
+
+## Boot e execução remota
+
+Instaladores Windows/Linux exigem configuração protocol 2 do agent pareado. Antes de escrever na ESP, verificam que PC ID e URL do agent correspondem ao manifesto, e que SHA-256 de iPXE e loader coincide. O manifesto protege contra seleção acidental de artefatos de outro PC, mas não substitui uma assinatura confiável do firmware/loader. Proteja a origem dos artefatos.
+
+Reboot e shutdown são comandos limitados do agent, sujeitos às permissões configuradas no PC. Não há execução arbitrária de shell/comandos fornecida pela API. `RemoteBoot.efi` bloqueia recursão conhecida por nome, caminho iPXE/RemoteBoot e protocolo marcador; isso não protege contra loader EFI malicioso ou comprometido.
+
+Reporte vulnerabilidades sem publicar credenciais, tokens ou dados pessoais. O scanner de secrets do repositório é uma verificação complementar, não uma certificação de segurança. Antes de publicar, exclua `config.local.json`, backups EFI e binários gerados para sua máquina; consulte `.gitignore`.

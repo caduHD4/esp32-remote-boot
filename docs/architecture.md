@@ -1,25 +1,33 @@
 # Arquitetura
 
-A ESP32 só serve o pequeno script de seleção. O installer embute script inicial e RemoteBoot.efi no iPXE; o loader final permanece no disco local.
+O firmware mantém até quatro PCs independentes. Cada PC tem ID de 32 caracteres hexadecimais minúsculos, MAC, catálogo de até 24 entradas UEFI e estado de boot próprio. Até oito agents podem estar vinculados, no máximo dois por PC. O agent sincroniza somente o catálogo do PC ao qual foi pareado. Um PC aceita uma sessão WebSocket ativa por vez.
 
-O host descobre Boot####, envia ID/descrição/flags e mantém heartbeat. O catálogo NVS suporta 24 entradas; nomes não identificam o target. A ordem e a visibilidade escolhidas pelo administrador sobrevivem à sincronização. Targets removidos invalidam padrão, fallback e pending; slots inválidos são retirados.
+## Estado e persistência
 
-Estado separado: padrão persistido na configuração; última escolha em NVS; pending e timestamp monotônico em RAM. Pending permanece em retries HTTP e só é consumido por heartbeat com ID correspondente ou expira. Reiniciar a ESP32 descarta pending por segurança, preservando padrão/última escolha. Um heartbeat sem ID confiável deixa a expiração a cargo do TTL.
+A configuração persistida usa schema 3 no namespace NVS `remote-boot-v3`. O JSON completo é serializado em uma de duas chaves (`bank0`, `bank1`), cada uma com cabeçalho de magic, geração, tamanho e CRC32. A gravação escreve o banco inativo, lê e valida o conteúdo e só então atualiza o marcador uint64 `commit` com geração e banco selecionado. Isso mantém o último snapshot válido disponível se uma gravação for interrompida. O snapshot tem limite de 20.000 bytes. A partição NVS começa em `0x9000` e tem tamanho `0x10000`; o app começa em `0x20000`.
 
-Configuração JSON em uma única chave NVS com schema 2. Migração de schema 1 ajusta a versão e TTL ausente; os demais campos devem validar. Conteúdo inválido ou versão futura fica bloqueado e preservado. Não se importam credenciais/targets da V1 antiga com sistemas hardcoded.
+O último PC selecionado para boot é persistido separadamente do catálogo. Pending, timestamps monotônicos, presença, sessão ativa e comandos aguardando resposta são estado em RAM; reiniciar o ESP32 descarta esses dados transitórios. Cada PC mantém padrão, fallback, ordem e visibilidade de entradas. Uma sincronização conserva ordem/visibilidade de IDs ainda presentes e remove referências a entradas removidas.
 
-UEFI: parse limitado de EFI_LOAD_OPTION → validação de Device Path → bloqueio de recursão → expansão HD() por assinatura → LoadImage → LoadOptions/OptionalData → StartImage. Fallback só é tentado uma vez e somente se a chamada retornar erro. OptionalData permanece alocado durante StartImage. BootCurrent é atualizado temporariamente se o firmware aceitar; a falha nessa atualização não impede o boot.
+## API, pareamento e isolamento
 
-Suporte inicial: paths completos e short form HD() com assinatura única. Paths multi-instance, URI/USB short forms e File()-only não têm expansão de boot manager completa. Entradas dessas classes podem falhar; retorne ao firmware. Rede/USB são ocultos por padrão. “Genérico” significa ausência de nomes de OS hardcoded, não implementação integral de todos os comportamentos de um boot manager UEFI.
+A interface de rede é API v2; respostas e configuração identificam schema 3. `/api/v1/*` retorna 410. Rotas administrativas usam o Bearer admin. Operações de PC recebem o ID do PC na rota e consultam apenas seu catálogo/estado. A identidade de um agent é resolvida pelo token vinculado e pela sessão ativa, nunca por um PC escolhido no payload. Mensagens autenticadas carregam `pc_id`, `agent_id` e `session_id`; os três precisam corresponder ao vínculo e à sessão.
 
-Timeout de DHCP e progresso HTTP usa 10 s no script inicial (builder aceita 1–60 s). Isso **não é deadline absoluto**: iPXE pode estender DHCP para link/switch e progresso HTTP reinicia seu timeout. Não há timeout seguro para interromper loader/kernel após transferência de controle. V2 não promete fallback se o OS falhar depois.
+O pareamento começa apenas durante uma janela aberta pelo administrador e exige aprovação explícita associada a um PC. A credencial do agent só é entregue depois da aprovação. O agent salva a configuração protocol 2 e confirma que recebeu e validou a sessão. Cada agent sincroniza o próprio catálogo; não existe token global de agent nem sincronização HTTP legada.
 
-Somente `net0` é selecionada no profile inicial, para evitar multiplicar timeouts; múltiplas NICs exigem ajuste do template e teste. `exit` retorna ao chamador/firmware; a continuação exata do BootOrder depende da implementação UEFI.
+## Despacho UEFI
 
-Fontes primárias: [UEFI Boot Manager](https://uefi.org/specs/UEFI/2.10/03_Boot_Manager.html), [Loaded Image](https://uefi.org/specs/UEFI/2.10/09_Protocols_EFI_Loaded_Image.html), [iPXE ifconf](https://ipxe.org/cmd/ifconf), [iPXE imgfetch](https://ipxe.org/cmd/imgfetch), [iPXE embed](https://ipxe.org/embed).
-# Despacho UEFI
+A ESP32 serve um script iPXE por PC em `/boot/{pc_id}.ipxe`. O instalador gera iPXE com esse URL específico e um manifesto liga o PC ID e IP da ESP32 aos hashes do iPXE e do loader. O script busca o loader final no disco local; a ESP32 não hospeda os sistemas operacionais.
 
-O `RemoteBoot.efi` valida a entrada solicitada, grava seu ID de 16 bits em `BootNext` e chama `ResetSystem(EfiResetCold)`. No boot seguinte, o firmware consome `BootNext` e executa a entrada usando sua política nativa. Isso evita tentar reproduzir parcialmente o Boot Manager dentro do iPXE.
+O `RemoteBoot.efi` valida a entrada solicitada, grava seu ID de 16 bits em `BootNext` e chama `ResetSystem(EfiResetCold)`. No boot seguinte, o firmware consome `BootNext` e executa a entrada usando sua política nativa. O endpoint de boot evita despachar novamente o mesmo alvo durante 60 segundos; nova solicitação aceita pela API rearma o despacho. Se a entrada indicada falhar e o firmware voltar ao iPXE, o script sai para a ordem normal da UEFI.
 
-O endpoint `/boot.ipxe` aplica uma janela de 60 segundos antes de entregar novamente o mesmo alvo. Uma nova solicitação aceita pela API rearma o despacho imediatamente. Se a entrada indicada não iniciar e o firmware voltar ao iPXE durante a janela, o script sai e a UEFI continua a ordem normal.
+O loader iPXE embute o URL do PC; portanto, reutilizar a mesma imagem EFI em máquinas distintas viola o vínculo do manifesto. Os installers preservam backup e BootOrder, mas não fazem rollback transacional completo após falha no meio da instalação.
 
+## Limites UEFI
+
+`RemoteBoot.efi` interpreta `EFI_LOAD_OPTION`, valida Device Path, bloqueia recursão, expande `HD()` por assinatura, chama `LoadImage`, configura `LoadOptions`/`OptionalData` e chama `StartImage`. Fallback é tentado no máximo uma vez e somente se a chamada retornar erro. `OptionalData` permanece alocado durante `StartImage`. A atualização de `BootCurrent` é temporária e sua falha não impede o boot.
+
+Suporte inicial: paths completos e short form `HD()` com assinatura única. Paths multi-instance, URI/USB short forms e `File()` sem expansão de boot manager completa podem falhar e retornar ao firmware. Rede/USB ficam ocultos por padrão. “Genérico” significa ausência de nomes de OS hardcoded, não implementação integral do Boot Manager UEFI.
+
+O timeout de DHCP e progresso HTTP do script inicial é 10 s (o builder aceita 1–60 s), mas não é deadline absoluto: iPXE pode estender DHCP para link/switch e reinicia o timeout durante progresso HTTP. Não há timeout seguro para interromper loader/kernel após transferência de controle. Somente `net0` é selecionada inicialmente; múltiplas NICs exigem ajuste e teste. `exit` retorna ao chamador/firmware, cuja continuação do BootOrder depende da implementação UEFI.
+
+Fontes: [UEFI Boot Manager](https://uefi.org/specs/UEFI/2.10/03_Boot_Manager.html), [Loaded Image](https://uefi.org/specs/UEFI/2.10/09_Protocols_EFI_Loaded_Image.html), [iPXE ifconf](https://ipxe.org/cmd/ifconf), [iPXE imgfetch](https://ipxe.org/cmd/imgfetch), [iPXE embed](https://ipxe.org/embed).

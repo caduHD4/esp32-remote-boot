@@ -2,21 +2,32 @@
 set -euo pipefail
 umask 077
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+agent_config=${RB_AGENT_CONFIG:-/etc/remote-boot/agent.json}
 # shellcheck source=agent/linux/common.sh
 source "$root/agent/linux/common.sh"
 # shellcheck source=installer/linux/efi_helpers.sh
 source "$root/installer/linux/efi_helpers.sh"
 [[ $EUID == 0 && -d /sys/firmware/efi/efivars ]] || { echo 'Run as root on UEFI Linux' >&2; exit 1; }
-rb_require efibootmgr findmnt lsblk jq curl make gcc objcopy git sha256sum
-read -r -p 'ESP32 IPv4 address: ' esp
-RB_URL="http://$esp"
-read -r -s -p 'Administrative token (24+ letters/digits/_/-): ' RB_TOKEN; printf '\n'
-rb_api GET status >/dev/null
-catalog=$(rb_catalog); jq . <<< "$catalog"
-if (( $(jq '.systems|length' <<< "$catalog")>24 )); then echo 'More than 24 entries. Reduce firmware entries before installing.' >&2; exit 1; fi
-rb_api POST systems/sync "$catalog"
+rb_require efibootmgr findmnt lsblk jq make gcc objcopy git sha256sum
+[[ -f $agent_config ]] || { echo "Paired protocol 2 agent config not found: $agent_config" >&2; exit 1; }
+identity=$(jq -ce 'select(.protocol==2 and (.pc_id|type=="string" and test("^[0-9a-f]{32}$")) and (.url|type=="string" and test("^http://([0-9]{1,3}\\.){3}[0-9]{1,3}/?$")))' "$agent_config") || { echo 'Agent config must contain protocol 2, a lowercase pc_id, and an IPv4 HTTP url.' >&2; exit 1; }
+pc_id=$(jq -r '.pc_id' <<< "$identity")
+agent_url=$(jq -r '.url' <<< "$identity"); agent_url=${agent_url%/}
+esp=${1:-${agent_url#http://}}
+[[ $agent_url == "http://$esp" && $esp =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo 'Target ESP address must match the paired agent config URL.' >&2; exit 1; }
+IFS=. read -r a b c d <<< "$esp"
+for octet in "$a" "$b" "$c" "$d"; do ((10#$octet<=255)) || { echo 'Invalid IPv4 address.' >&2; exit 1; }; done
+build_dir=${RB_BUILD_DIR:-$root/build/$pc_id}
 printf '\nSelect default and fallback in the ESP32 dashboard before testing.\n'
-bash "$root/ipxe/build.sh" "$esp"
+bash "$root/ipxe/build.sh" "$esp" "$pc_id" "$build_dir"
+manifest="$build_dir/manifest.json"
+ipxe="$build_dir/ipxe.efi"
+loader="$build_dir/RemoteBoot.efi"
+[[ -f $manifest && -f $ipxe && -f $loader ]] || { echo 'Build output is missing its manifest or EFI artifacts.' >&2; exit 1; }
+jq -e --arg esp "$esp" --arg pc "$pc_id" --arg ipxe "$(sha256sum "$ipxe" | cut -d' ' -f1)" --arg loader "$(sha256sum "$loader" | cut -d' ' -f1)" \
+    '.esp_ipv4==$esp and .pc_id==$pc and .ipxe_sha256==$ipxe and .loader_sha256==$loader' "$manifest" >/dev/null || { echo 'Build manifest target or hash mismatch.' >&2; exit 1; }
+catalog=$(rb_catalog)
+if (( $(jq '.systems|length' <<< "$catalog")>24 )); then echo 'More than 24 local entries. Sync the paired agent catalog before installing.' >&2; exit 1; fi
 esp_mount=''
 for candidate in /boot/efi /efi /boot; do
     if [[ $(findmnt -rn -M "$candidate" -o FSTYPE || true) == vfat ]]; then
@@ -59,7 +70,7 @@ if [[ -n $existing ]]; then
     [[ $answer == REUSE ]] || exit 0
 fi
 mkdir -p "$esp_mount/EFI/iPXE"
-cp "$root/build/ipxe.efi" "$esp_mount/EFI/iPXE/ipxe.efi.new"
+cp "$ipxe" "$esp_mount/EFI/iPXE/ipxe.efi.new"
 sync
 mv "$esp_mount/EFI/iPXE/ipxe.efi.new" "$esp_mount/EFI/iPXE/ipxe.efi"
 if [[ -z $existing ]]; then
@@ -78,12 +89,7 @@ fi
 new_order=$(efibootmgr | sed -n 's/^BootOrder: //p')
 [[ $old_order == "$new_order" ]] || { efibootmgr --bootorder "$old_order"; echo 'Unexpected BootOrder change restored' >&2; exit 1; }
 printf '%s\n' "$existing" > "$backup/RemoteBootId"
-rb_api POST systems/sync "$(rb_catalog)"
-printf '\n'
+printf '\nCatalog sync is handled by the paired native agent (PC %s).\n' "$pc_id"
 read -r -p 'Set BootNext for a one-time test? Type TEST: ' answer
 if [[ $answer == TEST ]]; then efibootmgr --bootnext "$existing"; fi
-read -r -p 'Install heartbeat agent? Type AGENT: ' answer
-if [[ $answer == AGENT ]]; then
-    bash "$root/installer/linux/install-agent.sh" "$esp"
-fi
-printf 'No reboot performed. Test manually, then run installer/linux/promote.sh %s after confirming successful boot.\n' "$existing"
+printf 'Paired native agent remains installed. No reboot performed. Test manually, then run installer/linux/promote.sh %s after confirming successful boot.\n' "$existing"

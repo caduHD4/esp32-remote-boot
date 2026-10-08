@@ -1,19 +1,28 @@
 #Requires -RunAsAdministrator
-param([Parameter(Mandatory)][string]$EspAddress,[Parameter(Mandatory)][string]$IpxeFile,[switch]$FullScan)
+param([Parameter(Mandatory)][string]$EspAddress,[Parameter(Mandatory)][string]$IpxeFile,[string]$AgentConfig,[string]$ManifestFile,[string]$LoaderFile,[switch]$FullScan)
 $ErrorActionPreference='Stop'
 $root=Split-Path (Split-Path $PSScriptRoot)
 . (Join-Path $root 'agent\windows\Common.ps1')
 $address=$null
 if(-not [Net.IPAddress]::TryParse($EspAddress,[ref]$address) -or $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork){throw 'Expected IPv4'}
-$script:RBUrl="http://$EspAddress"
-$secret=Read-Host 'Administrative token' -AsSecureString
-$script:RBToken=[Net.NetworkCredential]::new('',$secret).Password
-Invoke-RemoteBootApi GET status|Out-Null
+$programData=Join-Path $env:ProgramData 'RemoteBoot'
+if(-not $AgentConfig){$AgentConfig=Join-Path $programData 'agent.json'}
+if(-not $ManifestFile){$ManifestFile=Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $IpxeFile)) 'manifest.json'}
+if(-not $LoaderFile){$LoaderFile=Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $IpxeFile)) 'RemoteBoot.efi'}
+if(-not (Test-Path -LiteralPath $AgentConfig -PathType Leaf)){throw 'Paired protocol 2 agent config not found; install/pair the agent first.'}
+$identity=Get-Content -LiteralPath $AgentConfig -Raw|ConvertFrom-Json
+if($identity.protocol -ne 2 -or $identity.pc_id -notmatch '^[0-9a-f]{32}$' -or -not $identity.url){throw 'Agent config must contain protocol 2, a lowercase pc_id, and url.'}
+$agentUri=$null
+if(-not [Uri]::TryCreate([string]$identity.url,[UriKind]::Absolute,[ref]$agentUri) -or $agentUri.Scheme -ne 'http' -or $agentUri.Port -ne 80 -or $agentUri.Host -ne $EspAddress -or $agentUri.AbsolutePath -ne '/'){throw 'Agent config URL must match the target ESP IPv4 address.'}
+if(-not (Test-Path -LiteralPath $ManifestFile -PathType Leaf) -or -not (Test-Path -LiteralPath $LoaderFile -PathType Leaf)){throw 'Expected manifest.json and RemoteBoot.efi beside the selected iPXE image.'}
+$manifest=Get-Content -LiteralPath $ManifestFile -Raw|ConvertFrom-Json
+if($manifest.esp_ipv4 -cne $EspAddress -or $manifest.pc_id -cne $identity.pc_id){throw 'Build manifest targets another ESP or PC.'}
+$IpxeFile=(Resolve-Path -LiteralPath $IpxeFile).Path
+$LoaderFile=(Resolve-Path -LiteralPath $LoaderFile).Path
+if((Get-FileHash -LiteralPath $IpxeFile -Algorithm SHA256).Hash -ine $manifest.ipxe_sha256 -or (Get-FileHash -LiteralPath $LoaderFile -Algorithm SHA256).Hash -ine $manifest.loader_sha256){throw 'Build artifact hash does not match manifest.'}
 $catalog=Get-BootCatalog -FullScan:$FullScan
 if($catalog.systems.Count -gt 24){throw 'Catalog exceeds 24 entries. Remove obsolete firmware entries first.'}
 $catalog.systems|Format-Table id,name,hidden,blocked
-Invoke-RemoteBootApi POST systems/sync $catalog|Out-Null
-$IpxeFile=(Resolve-Path -LiteralPath $IpxeFile).Path
 $image=[IO.File]::ReadAllBytes($IpxeFile)
 if($image.Length -lt 256 -or $image[0] -ne 77 -or $image[1] -ne 90){throw 'Invalid PE image'}
 $pe=[BitConverter]::ToInt32($image,60)
@@ -64,8 +73,8 @@ try {
     if(-not $existing.Count){[Firmware]::Write("Boot$id",$entryBytes)}
     if([Convert]::ToBase64String([Firmware]::Read('BootOrder')) -ne [Convert]::ToBase64String($oldOrder)){throw 'Unexpected BootOrder change. See backup.'}
     Set-Content (Join-Path $backup 'RemoteBootId.txt') $id
-    Invoke-RemoteBootApi POST systems/sync (Get-BootCatalog -FullScan)|Out-Null
     if((Read-Host 'Type TEST to set BootNext for one-time test') -eq 'TEST'){[Firmware]::Write('BootNext',[BitConverter]::GetBytes([Convert]::ToUInt16($id,16)))}
     Write-Host "Installed Boot$id. BootOrder preserved. Backup: $backup"
 } finally { Remove-PartitionAccessPath -DiskNumber $diskNumber -PartitionNumber $partitionNumber -AccessPath $access }
-Write-Host 'Run install-agent.ps1 in each OS needing heartbeat. After successful test, use promote.ps1.'
+Write-Host "Installed PC-specific boot image for $($identity.pc_id). Agent catalog sync is handled by the paired native agent."
+Write-Host 'After successful test, use promote.ps1.'

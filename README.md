@@ -1,191 +1,110 @@
-# ESP32 Remote Boot V2
+# ESP32 Remote Boot 3 — múltiplos PCs
 
-Ligue o PC e escolha o próximo sistema por voz com Sinric Pro: um Switch aciona Windows e outro Linux. A ESP32 grava o target, envia Wake-on-LAN e o boot UEFI local carrega a entrada `Boot####` selecionada. Não há nomes de sistemas fixos no firmware.
+Controle computadores por dashboard, Wake-on-LAN, UEFI/iPXE e Sinric Pro. Versão **3.0.0-alpha.1**, configuração **v3**, API **v2**.
 
-**Experimental: builds e testes de software não equivalem a validação da V2 na placa/PC.** Consulte `IMPLEMENTATION_REPORT.md` e `docs/hardware-test.md` antes de instalar.
+- Até **4 PCs**, cada um com MAC, catálogo, estado, padrão/fallback, WoL e comandos próprios.
+- Até **8 instalações de agent** Windows/Linux e **24 entradas UEFI por PC**. Uma sessão ativa por computador.
+- Instalação do agent por **código curto**, sem copiar token longo. Windows e Linux no mesmo computador são pareados ao mesmo PC.
+- **Sinric controla apenas um PC escolhido**. Trocar a seleção limpa os Switches; remover esse PC desativa a integração.
+- A senha administrativa é criada no primeiro acesso, com os campos Senha e Repetir senha.
 
-Fluxo principal: Sinric Pro → ESP32 → WoL → iPXE local → `/boot.ipxe` → `RemoteBoot.efi` embutido → loader EFI local. A UKI é opcional. O PC precisa de Ethernet com WoL; a ESP32 usa Wi-Fi na mesma rede/broadcast. Dashboard e agents ampliam o controle, mas não substituem o fluxo Sinric.
+Esta versão exige configuração nova: agents/API antigos são rejeitados. NVS: **64 KiB**; APP: **0x20000**, tamanho **0x3E0000**. Ao substituir versão 2, faça backup e erase-flash antes da gravação. Testes de software/ESP não substituem testes físicos de WoL, energia e UEFI nos seus computadores.
 
-## Downloads por versão
+## Downloads
 
-Baixe os agents em [Releases](https://github.com/caduHD4/esp32-remote-boot/releases), na seção **Assets** da versão desejada:
+Em [Releases](https://github.com/caduHD4/esp32-remote-boot/releases), baixe a versão correspondente:
 
-- **Windows x64:** `remote-boot-agent-win-x64.exe`.
-- **Linux x64:** `remote-boot-agent-linux-x64`.
-- **Verificação:** `SHA256SUMS`.
+- `remote-boot-agent-win-x64.zip`
+- `remote-boot-agent-linux-x64.zip`
+- `agent-SHA256SUMS`
 
-Baixe também **Source code (zip)** da mesma versão para obter os installers. A versão inicial é uma **pré-release experimental**. Como o repositório é privado, é necessário entrar no GitHub com uma conta que tenha acesso.
+Extraia mantendo as pastas: os ZIPs incluem executável NativeAOT, installer e documentação. Não precisa instalar .NET. Para EFI/iPXE, baixe também **Source code (zip)**. No repositório privado, entre em uma conta com acesso. Artifacts de Actions estão disponíveis para desenvolvimento.
 
 ## Tailscale exige a variante MicroLink
 
-**Para conectar a ESP32 ao Tailscale, grave obrigatoriamente `esp32c3_4mb_microlink`.** A variante padrão `esp32c3_4mb` não inclui Tailscale: salvar uma Auth Key no painel não habilita a conexão nesse firmware.
+**Para conectar a ESP32 ao Tailscale, grave obrigatoriamente `esp32c3_4mb_microlink`.** A variante padrão `esp32c3_4mb` não inclui Tailscale: salvar uma Auth Key nela não habilita a conexão.
 
-Na raiz do projeto, use PlatformIO Core 6.1.19 e execute:
+Use PlatformIO Core **6.1.19**; 6.2.0 tem incompatibilidade com o SCons usado pelo PIOArduino:
 
 ```bash
+pipx install --force platformio==6.1.19
 pio run -e esp32c3_4mb_microlink
 pio run -e esp32c3_4mb_microlink -t upload
 ```
 
-Depois, entre pelo IP LAN, preencha a Auth Key em **Configuração → Tailscale** e salve. A ESP reinicia e tenta registrar na tailnet. Confira o card Tailscale; `DESATIVADO` indica que a variante padrão está gravada. Novos uploads também devem usar `-e esp32c3_4mb_microlink` para manter o suporte. A troca de variante preserva a configuração na NVS quando feita sem erase-flash. Veja [o guia completo do MicroLink/Tailscale](docs/microlink-tailscale.md).
+Depois, pelo IP LAN, preencha a Auth Key em **Configuração → Tailscale** e salve. A ESP reinicia e tenta registrar na tailnet. Confira o card; `DESATIVADO` indica a variante padrão. Novos uploads devem usar a variante MicroLink para manter Tailscale. Consulte [MicroLink/Tailscale](docs/microlink-tailscale.md).
 
 ## Primeiro uso
 
-1. Instale Python 3 e PlatformIO Core 6.1.18 para o firmware padrão. O POC MicroLink está fixado no PlatformIO Core 6.1.19; a versão 6.2.0 tem uma incompatibilidade conhecida com o SCons usado pelo PIOArduino. Veja o guia específico abaixo.
-2. Copie `config.local.example.json` para `config.local.json` e preencha o SSID/senha da rede **2,4 GHz**. Esse arquivo é obrigatório, ignorado pelo Git e embutido no firmware; não o compartilhe.
-3. Extraia o repositório e execute na raiz os comandos abaixo para a variante padrão, sem Tailscale. Para Tailscale, use os comandos MicroLink acima:
+1. Instale Python 3 e PlatformIO Core 6.1.19.
+2. Copie `config.local.example.json` para `config.local.json`; preencha SSID/senha de Wi-Fi **2,4 GHz**. O arquivo é ignorado pelo Git e embutido no firmware. Não o compartilhe.
+3. Na raiz, compile e grave a variante MicroLink acima, ou `pio run -e esp32c3_4mb -t upload` sem Tailscale.
+4. Veja o IP em `pio device monitor -b 115200` (USB atual: `pio device monitor -p COM8 -b 115200`). Reserve o IP no DHCP.
+5. Abra o IP, preencha **Senha** e **Repetir senha** e clique **Salvar e reiniciar ESP**. A senha aceita 8–128 caracteres sem controles. Wi-Fi é alterado em `config.local.json`, seguido de novo upload.
+6. Entre com sua senha, clique **Adicionar PC** e informe nome e MAC Ethernet.
+7. Na área **Agents**, abra a janela de sincronização. Execute o installer no Windows/Linux: ele mostra um código como `ABCD-EFGH`. Digite-o no painel, confira hostname/OS e escolha o PC. O installer salva a credencial automaticamente, verifica hello/catálogo, confirma o pareamento e inicia o serviço.
+8. Para Windows e Linux do mesmo computador, pareie ambas as instalações ao **mesmo PC**. Para outro computador, adicione outro PC. Reboot/shutdown exigem autorização local durante instalação.
+9. Configure UEFI/WoL, construa iPXE com o ID do PC e configure padrão/fallback. Para Sinric, escolha um único PC, salve a seleção e configure seus Switches. Teste antes de promover Remote Boot no BootOrder.
 
-   ```bash
-   pio run -e esp32c3_4mb
-   pio run -e esp32c3_4mb -t upload
-   pio device monitor -b 115200
-   ```
+## Agent Windows e Linux
 
-4. A ESP32 conecta somente à LAN configurada. Não existe SoftAP, captive portal ou AP de recuperação. Se a rede estiver indisponível, ela tenta reconectar automaticamente sem bloquear o firmware. Abra o IP exibido no monitor serial.
-5. No primeiro acesso, preencha **Senha** e **Repetir senha** e clique em **Salvar e reiniciar ESP**. Depois do reinício, entre com sua senha administrativa e configure o MAC e uma senha **diferente** para o agent no painel. Cada senha aceita 8–128 caracteres, exceto caracteres de controle. Wi-Fi é alterado apenas em `config.local.json`, seguido de novo upload.
-6. Salve e abra o IP da ESP32 com o token administrativo. Reserve o IP no DHCP. O endereço é embutido no build iPXE e não deve mudar.
-6. Configure UEFI/WoL seguindo `docs/bios.md`, `docs/linux-wol.md` e `docs/windows-wol.md`.
-7. Execute o installer do host e sincronize as entradas UEFI na dashboard. Mapeie dois Switches Sinric Pro: um para cada entrada. O fluxo guiado está em `docs/sinric.md`.
-8. Configure padrão/fallback na dashboard e teste cada Switch antes de promover a entrada Remote Boot no firmware.
+O cliente principal é **C# NativeAOT + WebSocket persistente**, com keepalive de 60 s e reconexão. Não abre porta no computador. Requer firmware 3 e protocolo 2. O [guia completo](docs/native-agent.md) explica configuração e diagnóstico.
 
-## Sinric Pro: passo a passo principal
-
-1. Acesse [portal.sinric.pro](https://portal.sinric.pro), crie uma conta e, em **Apps**, crie uma app, por exemplo `ESP32 Remote Boot`.
-2. Na área **Credentials** da app, copie **App Key** e **App Secret**. Nunca publique esses valores.
-3. Em **Devices**, crie dois dispositivos do tipo **Switch**: `PC Windows` e `PC Linux` (ou o nome da distribuição). Copie o **Device ID** de cada um.
-4. Vincule a conta Sinric Pro ao Alexa ou Google Home pelo fluxo oferecido no portal e execute a descoberta de dispositivos. Os dois Switches devem aparecer no assistente.
-5. Na dashboard da ESP32, em **Sinric**, marque **Ativar Sinric**, cole App Key/App Secret e adicione dois slots. Em cada slot, cole um Device ID e selecione o `Boot####` já testado para o sistema correspondente.
-6. Salve e aguarde a ESP32 reiniciar. O status deve indicar `Sinric online`.
-7. Com o PC desligado, teste `PC Windows` e `PC Linux` separadamente. Cada comando `ON` deve ligar o PC por WoL e iniciar apenas o `Boot####` mapeado.
-
-Não use `default` durante a validação inicial. Se um Switch iniciar o sistema errado, corrija apenas o mapeamento `Device ID → Boot####`; não altere o `BootOrder`. O guia detalhado, com recuperação e diagnóstico, está em [docs/sinric.md](docs/sinric.md).
-
-## Agent nativo C# (Windows e Linux)
-
-O cliente principal usa **C# NativeAOT + WebSocket persistente**. Recebe comandos por evento, sem polling HTTP de 12 s. Não exige .NET instalado; há executáveis separados para Windows x64 e Linux x64. Keepalive de 60 s e reconexão continuam necessários.
-
-Antes de instalar o agent, baixe o executável Windows/Linux em [Releases](https://github.com/caduHD4/esp32-remote-boot/releases), ou compile o código. Os artifacts de Actions continuam disponíveis para builds de desenvolvimento. Atualize a ESP32 para firmware 2.1. O [guia do agent nativo](docs/native-agent.md) mostra build, download, instalação e migração completos.
-
-```bash
-# Linux: marque o binário baixado como executável e instale
-chmod +x /caminho/remote-boot-agent
-sudo bash installer/linux/install-agent.sh SEU_IP_DA_ESP32 /caminho/remote-boot-agent
-```
+Na raiz do ZIP extraído, com a janela de pareamento aberta no painel:
 
 ```powershell
-# Windows: PowerShell elevado apenas durante a instalação
-.\installer\windows\install-agent.ps1 -EspAddress 'SEU_IP_DA_ESP32' -AgentFile 'C:\caminho\remote-boot-agent.exe'
+# PowerShell elevado; substitua o IP
+.\installer\windows\install-agent.ps1 -EspAddress 'SEU_IP_DA_ESP32'
 ```
 
-Substitua os placeholders e informe o **agent token**. Digite `SHUTDOWN` e/ou `REBOOT` para autorizar cada ação. Linux usa systemd; Windows inicia o `.exe` diretamente pelo Task Scheduler como SYSTEM. O cliente não abre porta no PC. Linux ainda usa bibliotecas nativas do OS e ferramentas `efibootmgr`/`systemctl` quando necessário. Consumo real ainda não foi medido.
+```bash
+# Linux UEFI com systemd; substitua o IP
+chmod +x build/agent/linux-x64/remote-boot-agent
+sudo bash installer/linux/install-agent.sh SEU_IP_DA_ESP32
+```
 
-## Linux
+Para usar um executável baixado separadamente, passe `-AgentFile CAMINHO` no Windows ou o caminho como segundo argumento no Linux. Digite `SHUTDOWN` e/ou `REBOOT` para autorizar cada ação. Configurações privadas ficam em `%ProgramData%\RemoteBoot` ou `/etc/remote-boot`; tokens não aparecem no dashboard. Instalar o agent não modifica EFI/BootOrder.
 
-Dependências básicas: Bash, `jq`, `curl`, `efibootmgr`, `util-linux`, `systemd`. Para construir: Git, GNU Make, GCC, binutils, GNU-EFI, Perl e headers de desenvolvimento usados pelo iPXE.
+## UEFI/iPXE
 
-Ubuntu/Debian:
+Fluxo: Sinric/dashboard → ESP → WoL → iPXE local → `/boot/<pc_id>.ipxe` → `RemoteBoot.efi` embutido → loader local. O PC precisa de Ethernet com WoL e UEFI. Cada imagem iPXE contém o ID do PC; não reutilize imagens entre PCs.
+
+Dependências para construir em Linux: Git, GNU Make/GCC/binutils, GNU-EFI, Perl e liblzma. Ubuntu/Debian:
 
 ```bash
 sudo apt install build-essential binutils gnu-efi git perl liblzma-dev jq curl efibootmgr
-sudo bash installer/linux/install.sh
+bash ipxe/build.sh SEU_IP_DA_ESP32 PC_ID
 ```
 
-Arch/CachyOS:
+O `pc_id` está no config pareado do agent. O build gera `build/PC_ID/ipxe.efi`, `RemoteBoot.efi`, `SHA256SUMS` e `manifest.json`, vinculados à ESP/PC/hashes. Mantenha juntos.
 
-```bash
-sudo pacman -S --needed base-devel binutils gnu-efi git perl xz jq curl efibootmgr
-sudo bash installer/linux/install.sh
-```
-
-O installer mostra a ESP e faz backup antes de escrever. Cria a entrada com `--create-only`, preservando BootOrder. A opção `TEST` agenda um único boot; não reinicia o PC. A opção `AGENT` instala o agent nativo WebSocket e, se habilitado explicitamente, reboot remoto confirmado pela dashboard.
-
-Após testar, `sudo bash installer/linux/promote.sh XXXX` pede confirmação para colocar a entrada em primeiro. `XXXX` é o ID mostrado pelo installer, nunca um valor fixo.
-
-## Windows 10/11 x64 UEFI
-
-O installer Windows usa PowerShell e APIs firmware nativas. O build GNU-EFI/iPXE precisa ser feito em Linux, inclusive WSL2, ou em outra máquina Linux:
-
-```bash
-bash ipxe/build.sh SEU_IP_DA_ESP32
-```
-
-O argumento acima deve ser substituído por IPv4 real. Copie `build/ipxe.efi` e confira `build/SHA256SUMS`.
-
-Em PowerShell elevado, na raiz do repositório:
+Depois de parear o agent, use `sudo bash installer/linux/install.sh` ou, em PowerShell elevado:
 
 ```powershell
-.\installer\windows\install.ps1 -EspAddress 'SEU_IP_DA_ESP32' -IpxeFile '.\build\ipxe.efi' -FullScan
-.\installer\windows\install-agent.ps1 -EspAddress 'SEU_IP_DA_ESP32'
+.\installer\windows\install.ps1 -EspAddress 'SEU_IP_DA_ESP32' -IpxeFile '.\build\PC_ID\ipxe.efi' -FullScan
 ```
 
-Não execute o installer Linux no WSL para alterar o firmware do host Windows: use WSL somente para o build. O installer Windows mostra as ESPs, exporta o estado e pede confirmação antes da escrita. Após o teste, use `installer/windows/promote.ps1 -BootId XXXX`. Política de execução corporativa permanece sob controle do administrador; os scripts não a alteram.
+Os installers verificam config/manifesto/hashes antes de escrever EFI, fazem backup e preservam BootOrder. O build Windows é feito em Linux/WSL; **não execute o installer Linux no WSL para alterar EFI do Windows**. Após teste, use `promote.sh XXXX` ou `promote.ps1 -BootId XXXX`; nunca um ID fixo. Consulte [UEFI](docs/uefi-discovery.md), [BIOS](docs/bios.md), [Windows WoL](docs/windows-wol.md) e [Linux WoL](docs/linux-wol.md).
 
-## Shutdown remoto (Windows e Linux)
+## Sinric Pro — um PC por ESP
 
-O mesmo agent recebe desligamento pela dashboard e por um Switch Sinric dedicado. Instale/atualize o agent em cada sistema e habilite a permissão `SHUTDOWN`:
+Crie uma app e dispositivos Switch no [portal Sinric](https://portal.sinric.pro). No painel, escolha **um PC** para a integração, salve a seleção e configure App Key/Secret e os Device IDs. Até 8 slots mapeiam entradas do catálogo desse PC, padrão ou desligamento. Alterar PC limpa os slots para evitar que Switches antigos controlem outro computador.
 
-```bash
-# Linux UEFI com systemd
-sudo bash installer/linux/install-agent.sh
-```
+Vincule Sinric ao seu assistente de voz. **ON** solicita a ação; **OFF** não faz nada. Shutdown exige agent online com permissão local. Os demais PCs continuam disponíveis pela dashboard. Veja [passo a passo](docs/sinric.md).
 
-```powershell
-# Windows PowerShell como administrador
-.\installer\windows\install-agent.ps1 -EspAddress 'SEU_IP_DA_ESP32'
-```
-
-Informe o IP reservado/token do agent e atualize também o firmware ESP32. Na dashboard, use **Desligar PC** e confirme. No Sinric, crie um Switch **Desligar PC**, adicione seu Device ID e mapeie para **Desligar PC (agent)**. Enviar **ON** a esse Switch desliga o OS que estiver rodando; **OFF não faz nada**. Para dizer “desligar computador”, use uma rotina do assistente que acione esse Switch com ON.
-
-O cliente C# recebe comandos por WebSocket, sem consultas periódicas de comandos. A instalação nativa está descrita acima. Shutdown é normal, sem modo forçado; salve o trabalho. Consumo e shutdown físico ainda não foram medidos/testados. Veja [instalação, uso e diagnóstico completos](docs/shutdown.md).
-
-## Uso
-
-- Dashboard: botões de boot, visibilidade/ordem das entradas, rede, WoL, padrão, fallback, comportamento do botão físico do **PC**, TTL e Sinric.
-- PC online: boot comum retorna `409 PC_ALREADY_ON`. “Forçar WoL” só envia o pacote; não reinicia.
-- “Reiniciar neste sistema” exige confirmação e agent habilitado. O agent agenda diretamente `BootNext` para o target.
-- Agent nativo: WebSocket com keepalive de 60 s; queda detectada encerra a sessão. Cliente HTTP legado: intervalo de 12 s e timeout de 45 s, apenas para compatibilidade.
-- Sinric: é a integração principal de Wake-on-LAN dual boot. Configure dois Switch IDs reais, um para cada Boot ID; até 8 slots são suportados. A dashboard permanece a interface completa.
-
-## Build e testes
+## Testes e limites
 
 ```bash
 bash tests/run.sh
 pio run -e esp32c3_4mb
-make -C uefi/remote-boot
-bash ipxe/build.sh 192.0.2.10
+pio run -e esp32c3_4mb_microlink
+npm ci
+npx playwright install
+npm run test:ui
 ```
 
-`192.0.2.10` é endereço de documentação para validar build, **não** um endereço funcional de instalação. APP: `0x3F0000` bytes, sem OTA ou filesystem de UI. O size gate falha acima de 90% dessa partição.
+O size gate usa a partição real e falha acima de 90%. A UI é um asset gzip determinístico, sem filesystem/OTA. Configuração é gravada em dois bancos NVS com CRC, leitura de confirmação e seleção atômica por geração. Catálogos são paginados, no máximo 8 entradas por página. Pareamento dura 5 minutos, com limites de solicitações e tentativas.
 
-Em Linux que usa ptrace e impede LeakSanitizer: `ASAN_OPTIONS=detect_leaks=0 bash tests/run.sh` mantém AddressSanitizer/UBSan, mas não valida leaks.
+Testes automáticos de energia usam FakeHost. Testes físicos de dois PCs, perda de energia durante gravação e soak prolongado exigem equipamento. Consulte [matriz](docs/testing/multi-pc-agent-pairing.md), [dashboard](docs/dashboard.md), [API](docs/api.md), [arquitetura](docs/architecture.md), [segurança](SECURITY.md) e [hardware](docs/hardware-test.md).
 
-### POC MicroLink + Tailscale
-
-A variante `esp32c3_4mb_microlink` permite acessar a dashboard pelo IP Tailscale do próprio ESP32-C3, sem hardware auxiliar. Ela é opt-in, usa uma credencial local ignorada pelo Git e não altera o ambiente estável `esp32c3_4mb`.
-
-```bash
-pipx install --force platformio==6.1.19
-# Cadastre a Auth Key pela dashboard após gravar.
-pio run -e esp32c3_4mb_microlink -t upload
-pio device monitor -b 115200
-```
-
-Leia [configuração, riscos, diagnóstico e rollback do MicroLink/Tailscale](docs/microlink-tailscale.md) antes de gravar essa variante experimental.
-
-Os workflows estão em `.github/workflows`. Para trabalhar localmente, clone o repositório, revise os arquivos e crie commits normalmente.
-
-## Documentação
-
-- [Instalação e recuperação](docs/setup.md)
-- [Arquitetura e limites](docs/architecture.md)
-- [API](docs/api.md)
-- [Dashboard](docs/dashboard.md)
-- [MicroLink + Tailscale experimental](docs/microlink-tailscale.md)
-- [Descoberta UEFI](docs/uefi-discovery.md)
-- [Sinric Pro: fluxo principal](docs/sinric.md)
-- [UKI opcional](docs/uki.md)
-- [Teste em hardware](docs/hardware-test.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Segurança](SECURITY.md)
-
-O snapshot privado, suas UUIDs, endereços, credenciais e UKI não fazem parte deste repositório.
+Credenciais, snapshots privados, UUIDs reais e UKIs não pertencem ao repositório.

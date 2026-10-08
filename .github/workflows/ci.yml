@@ -19,7 +19,7 @@ jobs:
       - run: bash tests/config.sh
       - run: make -C uefi/remote-boot
       - run: file uefi/remote-boot/RemoteBoot.efi | grep 'PE32+.*EFI application.*x86-64'
-      - run: bash ipxe/build.sh 192.0.2.10
+      - run: bash ipxe/build.sh 192.0.2.10 00112233445566778899aabbccddeeff
       - name: PowerShell syntax and C# tests
         shell: pwsh
         run: ./tests/powershell.ps1
@@ -39,3 +39,19 @@ jobs:
       - uses: actions/checkout@v4
       - shell: powershell
         run: ./tests/powershell.ps1
+  dashboard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run test:ui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dashboard-failures
+          path: test-results/

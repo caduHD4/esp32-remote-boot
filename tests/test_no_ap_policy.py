@@ -10,7 +10,7 @@ for forbidden in ("DNSServer", "WiFi.softAP", "WIFI_AP_STA", "setupAP(", "setup_
 assert "WIFI_CONNECT_ATTEMPT" in main
 assert "WiFi.setAutoReconnect(true)" in main
 assert "WiFi.disconnect(false,false);" not in main
-assert "Calling WiFi.begin() again while the IDF driver is associating" in main
+assert main.count("WiFi.begin(") == 1
 assert "|ssid|" not in main
 assert "|wifi_password|" not in main
 assert "config.local.json" in dashboard

@@ -1,0 +1,2 @@
+const assert=require('node:assert/strict');require('../firmware/web/pc-model.js');
+const model=RemoteBootPcModel();model.select('a');const a=model.capture(),controller=new AbortController();model.track(controller);model.select('b');assert(controller.signal.aborted);assert(!model.current(a));const b=model.capture();assert(model.current(b));model.select('b');assert(!model.current(b));assert.equal(a.pcId,'a');console.log('PASS: per-PC generation and cancellation guards');

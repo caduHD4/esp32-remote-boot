@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   workflow_call:
 permissions:
-  contents: read
+  contents: write
 jobs:
   publish:
     strategy:
@@ -35,9 +35,35 @@ jobs:
           & "./build/agent/${{ matrix.rid }}/${{ matrix.executable }}" --self-test
           if ($LASTEXITCODE -ne 0) { throw 'Native tests failed' }
           Get-FileHash "./build/agent/${{ matrix.rid }}/${{ matrix.executable }}" -Algorithm SHA256 | Format-List | Out-File "./build/agent/${{ matrix.rid }}/SHA256.txt"
+      - name: Linux installer fixtures
+        if: runner.os == 'Linux'
+        run: python3 agent/native/tests/installer-fixtures.py
+      - name: Windows installer fixtures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./agent/native/tests/installer-fixtures.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.rid }}
           path: |
             build/agent/${{ matrix.rid }}/${{ matrix.executable }}
             build/agent/${{ matrix.rid }}/SHA256.txt
+  release:
+    if: startsWith(github.ref, 'refs/tags/v3.')
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-*
+          path: build/native-artifacts
+      - name: Package agents and installers
+        run: python3 scripts/package_agents.py
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist/remote-boot-agent-*.zip
+            dist/agent-SHA256SUMS

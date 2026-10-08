@@ -2,6 +2,10 @@
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 temp=$(mktemp -d); trap 'rm -rf "$temp"' EXIT
+g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_multi_pc_policy.cpp" -o "$temp/test_multi_pc_policy"
+"$temp/test_multi_pc_policy"
+g++ -std=c++17 -Wall -Wextra -Werror -I"$root/tests/stubs" "$root/tests/test_config_store.cpp" -o "$temp/test_config_store"
+"$temp/test_config_store"
 g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer "$root/tests/test_core.cpp" -o "$temp/test_core"
 "$temp/test_core"
 g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_credential_policy.cpp" -o "$temp/test_credential_policy"
@@ -31,14 +35,17 @@ bash "$root/tests/test_shutdown.sh"
 bash "$root/tests/test_discovery.sh"
 bash "$root/tests/test_efi_helpers.sh"
 bash "$root/tests/test_uefi_bootnext.sh"
+bash "$root/tests/test_pc_boot.sh"
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "$root/agent" "$root/installer" "$root/ipxe" "$root/scripts" "$root/tests" -name '*.sh' -print0)
 python3 "$root/tests/test_embed_local_wifi.py"
 python3 "$root/tests/test_no_ap_policy.py"
 python3 "$root/tests/test_microlink_build_config.py"
+python3 "$root/tests/test_partition_layout.py"
 python3 "$root/tests/test_microlink_vendor.py"
 python3 "$root/tests/test_web_asset.py"
 python3 "$root/tests/test_dashboard_ui.py"
 node "$root/tests/test_dashboard_validation.js"
+node "$root/tests/test_dashboard_model.js"
 node "$root/tests/test_dashboard_polling.js"
 node "$root/tests/test_microlink_dashboard.js"
 python3 "$root/scripts/scan_secrets.py"

@@ -4,9 +4,9 @@ import importlib.util
 
 
 ROOT = Path(__file__).resolve().parents[1]
-html = (ROOT / "firmware/web/index.html").read_text()
-css = (ROOT / "firmware/web/app.css").read_text()
-js = (ROOT / "firmware/web/app.js").read_text()
+html = (ROOT / "firmware/web/index.html").read_text(encoding="utf-8")
+css = (ROOT / "firmware/web/app.css").read_text(encoding="utf-8")
+js = (ROOT / "firmware/web/app.js").read_text(encoding="utf-8")
 
 for landmark in ("<header", "<nav", "<main", "<aside"):
     assert landmark in html, landmark

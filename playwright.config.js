@@ -1,0 +1,2 @@
+const {defineConfig}=require('@playwright/test');
+module.exports=defineConfig({testDir:'./tests/ui',timeout:20000,fullyParallel:true,use:{baseURL:'http://127.0.0.1:4173',trace:'retain-on-failure'},webServer:{command:'node tests/ui/server.js',port:4173,reuseExistingServer:false},projects:['chromium','firefox','webkit'].flatMap(browserName=>[360,390,768,1280].map(width=>({name:`${browserName}-${width}`,use:{browserName,viewport:{width,height:900}}})))});
