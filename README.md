@@ -16,11 +16,24 @@ Baixe os agents em [Releases](https://github.com/caduHD4/esp32-remote-boot/relea
 
 Baixe também **Source code (zip)** da mesma versão para obter os installers. A versão inicial é uma **pré-release experimental**. Como o repositório é privado, é necessário entrar no GitHub com uma conta que tenha acesso.
 
+## Tailscale exige a variante MicroLink
+
+**Para conectar a ESP32 ao Tailscale, grave obrigatoriamente `esp32c3_4mb_microlink`.** A variante padrão `esp32c3_4mb` não inclui Tailscale: salvar uma Auth Key no painel não habilita a conexão nesse firmware.
+
+Na raiz do projeto, use PlatformIO Core 6.1.19 e execute:
+
+```bash
+pio run -e esp32c3_4mb_microlink
+pio run -e esp32c3_4mb_microlink -t upload
+```
+
+Depois, entre pelo IP LAN, preencha a Auth Key em **Configuração → Tailscale** e salve. A ESP reinicia e tenta registrar na tailnet. Confira o card Tailscale; `DESATIVADO` indica que a variante padrão está gravada. Novos uploads também devem usar `-e esp32c3_4mb_microlink` para manter o suporte. A troca de variante preserva a configuração na NVS quando feita sem erase-flash. Veja [o guia completo do MicroLink/Tailscale](docs/microlink-tailscale.md).
+
 ## Primeiro uso
 
 1. Instale Python 3 e PlatformIO Core 6.1.18 para o firmware padrão. O POC MicroLink está fixado no PlatformIO Core 6.1.19; a versão 6.2.0 tem uma incompatibilidade conhecida com o SCons usado pelo PIOArduino. Veja o guia específico abaixo.
 2. Copie `config.local.example.json` para `config.local.json` e preencha o SSID/senha da rede **2,4 GHz**. Esse arquivo é obrigatório, ignorado pelo Git e embutido no firmware; não o compartilhe.
-3. Extraia o repositório e execute na raiz:
+3. Extraia o repositório e execute na raiz os comandos abaixo para a variante padrão, sem Tailscale. Para Tailscale, use os comandos MicroLink acima:
 
    ```bash
    pio run -e esp32c3_4mb
