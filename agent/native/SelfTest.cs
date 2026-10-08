@@ -85,7 +85,7 @@ public static class SelfTest {
         Assert(Config.ValidToken("!@#$%^&*"));
         Assert(!Config.ValidToken("curta7"));
         Assert(!Config.ValidToken("linha\nquebrada"));
-        Assert(!Config.ValidToken(new string(\'x\',129)));
+        Assert(!Config.ValidToken(new string('x',129)));
         string directory=Path.Combine(Path.GetTempPath(),"remote-boot-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
         try {
             string path=Path.Combine(directory,"ack");var host=new FakeHost();var config=new Config{AllowShutdown=true,AllowReboot=true};
