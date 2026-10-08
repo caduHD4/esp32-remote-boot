@@ -19,6 +19,8 @@ jobs:
       - run: g++ -std=c++17 -Wall -Wextra -Werror -I.pio/libdeps/esp32c3_4mb_microlink/ArduinoJson/src -Itests/stubs tests/test_document_transaction_real.cpp -o /tmp/test_document_transaction_real && /tmp/test_document_transaction_real
       - name: Bounded Tailscale delta parser
         run: python3 tests/test_microlink_delta.py "$HOME/.platformio/packages/framework-espidf/components/json/cJSON"
+      - name: In-place authenticated Noise decryption
+        run: python3 tests/test_microlink_noise_inplace.py "$HOME/.platformio/packages/framework-espidf/components/mbedtls/mbedtls"
       - run: bash tests/config.sh
       - run: make -C uefi/remote-boot
       - run: file uefi/remote-boot/RemoteBoot.efi | grep 'PE32+.*EFI application.*x86-64'

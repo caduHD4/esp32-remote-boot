@@ -25,6 +25,8 @@
 #include "ml_io_policy.h"
 #include "ml_json_scan.h"
 #include "ml_register_scratch.h"
+#include "ml_coord_workspace.h"
+#include "ml_h2_stream_data.h"
 #include "x25519.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -47,9 +49,9 @@ static const char *TAG = "ml_coord";
 static uint8_t s_node_key_challenge[32] = {0};
 static bool s_has_node_key_challenge = false;
 
-/* The ESP32-C3 has no PSRAM. Keep this buffer in BSS so reconnects do not
- * depend on finding a fresh 32KB contiguous heap block after TLS/cJSON work. */
-static uint8_t s_map_response_buffer[ML_H2_BUFFER_SIZE + 1];
+/* Registration and the initial map share a bounded lease. Release it before
+ * steady-state DERP traffic so idle connections do not reserve 32 KiB. */
+static ml_coord_workspace s_coord_workspace;
 _Static_assert(ML_H2_BUFFER_SIZE >= ML_REGISTER_SHARED_MIN_CAPACITY,
                "Coord scratch requires at least 32 KiB for registration slices");
 
@@ -695,7 +697,7 @@ static int do_h2_preface(microlink_t *ml, ml_noise_state_t *noise) {
  * State: REGISTER - Send RegisterRequest, parse RegisterResponse
  * ========================================================================== */
 
-static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
+static int do_register_impl(microlink_t *ml, ml_noise_state_t *noise) {
     int64_t t_reg_start = esp_timer_get_time();
 
     /* Build RegisterRequest JSON */
@@ -806,8 +808,8 @@ static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
     /* Read RegisterResponse - accumulate all Noise frames into H2 buffer first,
      * then parse H2 frames (same pattern as MapResponse). */
     ml_register_workspace workspace;
-    if (!ml_register_workspace_init(&workspace, s_map_response_buffer,
-                                    sizeof(s_map_response_buffer))) return -1;
+    if (!ml_register_workspace_init(&workspace, s_coord_workspace.storage,
+                                    s_coord_workspace.capacity)) return -1;
     uint8_t *h2_resp = workspace.h2;
     size_t h2_resp_len = 0;
 
@@ -1494,7 +1496,7 @@ static int add_endpoints_to_json(microlink_t *ml, cJSON *root) {
     return count;
 }
 
-static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
+static int do_fetch_peers_impl(microlink_t *ml, ml_noise_state_t *noise) {
     int64_t t_map_start = esp_timer_get_time();
 
     /* Build MapRequest JSON */
@@ -1584,7 +1586,7 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
      * This is critical because a single H2 frame can span multiple Noise frames
      * (v1 does the same with h2_buffer).
      * Smart timeout: extend to 60s for large tailnets (300+ peers = 240KB+). */
-    uint8_t *h2_recv = s_map_response_buffer;
+    uint8_t *h2_recv = s_coord_workspace.storage;
     size_t h2_total = 0;
     size_t json_total = 0;
 
@@ -2002,7 +2004,27 @@ static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
  * State: LONG_POLL - Start streaming MapRequest + process incremental updates
  * ========================================================================== */
 
-/* Send MapRequest with Stream=true to start long-poll on H2 stream 5 */
+/* The task owns this lease only during registration and the initial map. */
+static int do_register(microlink_t *ml, ml_noise_state_t *noise) {
+    if(!ml_coord_workspace_acquire(&s_coord_workspace,ML_H2_BUFFER_SIZE+1,ml_psram_malloc)) {
+        ESP_LOGW(TAG,"Registration workspace allocation failed: %u bytes",(unsigned)(ML_H2_BUFFER_SIZE+1));
+        return -1;
+    }
+    int result=do_register_impl(ml,noise);
+    if(result<0)ml_coord_workspace_release(&s_coord_workspace);
+    return result;
+}
+static int do_fetch_peers(microlink_t *ml, ml_noise_state_t *noise) {
+    if(!ml_coord_workspace_acquire(&s_coord_workspace,ML_H2_BUFFER_SIZE+1,ml_psram_malloc)) {
+        ESP_LOGW(TAG,"Initial map workspace allocation failed: %u bytes",(unsigned)(ML_H2_BUFFER_SIZE+1));
+        return -1;
+    }
+    int result=do_fetch_peers_impl(ml,noise);
+    ml_coord_workspace_release(&s_coord_workspace);
+    return result;
+}
+
+/* Send MapRequest with Stream=true to start long-poll on H2 stream 5. */
 static int do_start_long_poll(microlink_t *ml, ml_noise_state_t *noise) {
     cJSON *root = cJSON_CreateObject();
     if (!root) return -1;
@@ -2251,8 +2273,7 @@ static int parse_map_delta(microlink_t *ml, ml_json_slice_t root) {
 static int consume_map_data(microlink_t *ml, const uint8_t *data, size_t len) {
     while (len) {
         size_t used = 0;
-        int ready = ml_frame_feed_buffer(&ml->map_rx, ML_FRAME_MAP, data, len, &used,
-            ML_H2_BUFFER_SIZE, s_map_response_buffer, sizeof(s_map_response_buffer));
+        int ready = ml_frame_feed(&ml->map_rx, ML_FRAME_MAP, data, len, &used, ML_H2_BUFFER_SIZE);
         data += used; len -= used;
         if (ready < 0) {
             ESP_LOGW(TAG, "Long-poll map frame rejected: %u bytes", (unsigned)ml->map_rx.length);
@@ -2271,6 +2292,10 @@ static int consume_map_data(microlink_t *ml, const uint8_t *data, size_t len) {
     return 0;
 }
 
+static int consume_h2_data(void *context,uint32_t stream,const uint8_t *data,size_t length) {
+    return stream==5?consume_map_data((microlink_t*)context,data,length):0;
+}
+
 static int consume_h2_frame(microlink_t *ml, ml_noise_state_t *noise) {
     ml_frame_reader *r = &ml->h2_rx;
     uint8_t type = r->header[3], flags = r->header[4];
@@ -2281,12 +2306,7 @@ static int consume_h2_frame(microlink_t *ml, ml_noise_state_t *noise) {
         return -1;
     }
     if (type == 0) {
-        size_t offset = 0, length = r->length;
-        if (flags & 8) { // HTTP/2 DATA padding counts toward flow control.
-            if (!length || r->payload[0] >= length) return -1;
-            offset = 1; length -= 1 + r->payload[0];
-        }
-        if (stream == 5 && consume_map_data(ml, r->payload + offset, length) < 0) return -1;
+        /* Authenticated DATA fragments were already consumed by ml_h2_feed. */
         if (r->length) {
             uint8_t wu[26];
             int n = ml_h2_build_window_update(wu, 13, 0, r->length);
@@ -2334,27 +2354,22 @@ static int poll_map_update(microlink_t *ml, ml_noise_state_t *noise) {
         return ready;
     }
     size_t plain_len = r->length-16;
-    uint8_t *plain = ml_psram_malloc(plain_len ? plain_len : 1);
-    if (!plain) {
-        ESP_LOGW(TAG, "Long-poll plaintext allocation failed: %u bytes", (unsigned)plain_len);
-        return -1;
-    }
+    uint8_t *plain = r->payload; // ChaCha20-Poly1305 supports identical input/output.
     if (ml_noise_decrypt(noise->rx_key,noise->rx_nonce,NULL,0,r->payload,r->length,plain) != ESP_OK) {
-        free(plain); return -1;
+        ml_frame_reset(r); return -1;
     }
     noise->rx_nonce++;
-    ml_frame_reset(r);
     size_t pos = 0;
     while (pos < plain_len) {
-        ready = ml_frame_feed(&ml->h2_rx,ML_FRAME_H2,plain+pos,plain_len-pos,&used,32768);
+        ready = ml_h2_feed(&ml->h2_rx,plain+pos,plain_len-pos,&used,ML_H2_BUFFER_SIZE,consume_h2_data,ml);
         pos += used;
         if (ready < 0) ESP_LOGW(TAG, "Long-poll H2 frame rejected: %u bytes", (unsigned)ml->h2_rx.length);
         if (ready < 0 || (ready > 0 && consume_h2_frame(ml,noise) < 0)) {
-            free(plain); return -1;
+            ml_frame_reset(r); return -1;
         }
         if (ready > 0) ml_frame_reset(&ml->h2_rx);
     }
-    free(plain);
+    ml_frame_reset(r);
     return 1; // Authenticated receive, not a local ping send.
 }
 
@@ -2398,6 +2413,7 @@ void ml_coord_task(void *arg) {
                 }
                 break;
             case ML_CMD_DISCONNECT:
+                ml_coord_workspace_release(&s_coord_workspace);
                 ml_frame_reset(&ml->coord_rx);
                 ml_frame_reset(&ml->h2_rx);
                 ml_frame_reset(&ml->map_rx);
@@ -2781,6 +2797,7 @@ void ml_coord_task(void *arg) {
             break;
 
         case COORD_RECONNECTING:
+            ml_coord_workspace_release(&s_coord_workspace);
             __atomic_store_n(&ml->diagnostics.control_online, 0, __ATOMIC_RELAXED);
             __atomic_add_fetch(&ml->diagnostics.reconnects, 1, __ATOMIC_RELAXED);
             ml_frame_reset(&ml->coord_rx);
@@ -2823,6 +2840,7 @@ void ml_coord_task(void *arg) {
     }
 
     /* Cleanup */
+    ml_coord_workspace_release(&s_coord_workspace);
     if (ml->coord_sock >= 0) {
         ml_close_sock(ml->coord_sock);
         ml->coord_sock = -1;

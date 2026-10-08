@@ -27,6 +27,7 @@ checks = []
 created = []
 sockets = []
 bindings = []
+latencies = []
 
 
 def api(path, method="GET", payload=None, token=password, session=None, expected=200):
@@ -36,12 +37,14 @@ def api(path, method="GET", payload=None, token=password, session=None, expected
     if session:
         headers["X-Agent-Session"] = session
     request = urllib.request.Request(args.url.rstrip("/") + path, data=None if payload is None else json.dumps(payload).encode(), headers=headers, method=method)
+    started=time.monotonic()
     try:
         response = urllib.request.urlopen(request, timeout=12)
     except urllib.error.HTTPError as error:
         response = error
     with response:
         data = response.read().decode()
+        latencies.append(time.monotonic()-started)
         assert response.status == expected, f"{method} {path}: expected {expected}, got {response.status}"
         return json.loads(data)
 
@@ -188,9 +191,12 @@ try:
     assert all(pc["status"]["online"] for pc in api("/api/v2/bootstrap")["pcs"])
     check("invalid changes roll back durable configuration without disconnecting agents")
     minimum_heap=2**32;minimum_largest=2**32;tailscale_samples=0;tailscale_expected=initial["status"]["tailscale"]["configured"]
-    end=time.monotonic()+args.soak_seconds
+    end=time.monotonic()+args.soak_seconds;last_uptime=0
+    print("SOAK START: 4 PCs, 96 entries, 4 sockets",flush=True)
     while time.monotonic()<end:
         status=api("/api/v2/status")
+        assert status["uptime"]>=last_uptime,"Unexpected ESP restart during soak"
+        last_uptime=status["uptime"]
         minimum_heap=min(minimum_heap,status["heap"])
         minimum_largest=min(minimum_largest,status["tailscale"]["largest_block"])
         if status["tailscale"]["control_online"] and status["tailscale"]["derp_online"]:
@@ -247,7 +253,7 @@ try:
     assert restored["config"]["sinric_pc_id"]=="" and not restored["config"]["sinric_enabled"]
     check("Sinric selection clears stale mappings; removal disables selected integration")
     args.report.parent.mkdir(parents=True,exist_ok=True)
-    args.report.write_text(json.dumps({"checks":checks,"minimum_heap":minimum_heap,"minimum_largest_block":minimum_largest,"soak_seconds":args.soak_seconds,"real_os_power_actions":False},indent=2)+"\n")
+    args.report.write_text(json.dumps({"checks":checks,"minimum_heap":minimum_heap,"minimum_largest_block":minimum_largest,"maximum_http_latency_s":round(max(latencies),3),"tailscale_online_samples":tailscale_samples,"soak_seconds":args.soak_seconds,"real_os_power_actions":False},indent=2)+"\n")
 finally:
     for socket in sockets:
         try:socket.close()

@@ -25,7 +25,7 @@ coord_source = (microlink / "src/ml_coord.c").read_text(encoding="utf-8")
 register = coord_source.split("static int do_register", 1)[1].split("static int do_fetch_peers", 1)[0]
 assert '#include "ml_register_scratch.h"' in coord_source
 assert '_Static_assert(ML_H2_BUFFER_SIZE >= ML_REGISTER_SHARED_MIN_CAPACITY' in coord_source
-assert "ml_register_workspace_init(&workspace, s_map_response_buffer" in register
+assert "ml_register_workspace_init(&workspace, s_coord_workspace.storage" in register
 for name in ("h2_resp", "resp_buf", "frame_buf"):
     assert f"free({name})" not in register
 for size in (16384, 8192, 4096):
@@ -33,8 +33,10 @@ for size in (16384, 8192, 4096):
 fetch_peers = coord_source.split("static int do_fetch_peers", 1)[1].split(
     "static int do_start_long_poll", 1
 )[0]
-assert "static uint8_t s_map_response_buffer[ML_H2_BUFFER_SIZE + 1];" in coord_source
-assert "uint8_t *h2_recv = s_map_response_buffer;" in fetch_peers
+assert "static ml_coord_workspace s_coord_workspace;" in coord_source
+assert "s_map_response_buffer[" not in coord_source
+assert "ml_coord_workspace_release(&s_coord_workspace)" in fetch_peers
+assert "uint8_t *h2_recv = s_coord_workspace.storage;" in fetch_peers
 assert "ml_psram_malloc(ML_H2_BUFFER_SIZE)" not in fetch_peers
 assert "ml_psram_malloc(ML_JSON_BUFFER_SIZE)" not in fetch_peers
 assert "ml_psram_malloc(ML_NOISE_FRAME_BUFFER_SIZE)" not in fetch_peers
@@ -89,7 +91,14 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run([str(binary)], check=True)
 
 long_poll = coord_source.split("static int consume_map_data", 1)[1].split("static int consume_h2_frame", 1)[0]
-assert "ml_frame_feed_buffer(&ml->map_rx" in long_poll
-assert "s_map_response_buffer, sizeof(s_map_response_buffer)" in long_poll
+assert "ml_frame_feed(&ml->map_rx" in long_poll
+assert "ml_frame_feed_buffer(&ml->map_rx" not in long_poll
 assert "cJSON_ParseWithLengthOpts" not in long_poll
 assert "parse_map_delta(ml, update)" in long_poll
+
+poll = coord_source.split("static int poll_map_update", 1)[1].split("void ml_coord_task", 1)[0]
+assert "uint8_t *plain = r->payload" in poll
+assert "ml_psram_malloc(plain_len" not in poll
+assert "free(plain)" not in poll
+assert "ml_h2_feed(&ml->h2_rx" in poll
+assert "ml_noise_decrypt" in poll and "ml_frame_reset(r)" in poll

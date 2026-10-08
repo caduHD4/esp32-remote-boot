@@ -28,3 +28,11 @@ Alterações locais necessárias para o ESP32-C3:
   consumed RX and flushed TX buffers shrink to small idle state. Configuration
   and CA certificate freeing stay disabled to preserve reconnect ownership.
   The existing DERP TLS admission guard remains unchanged.
+
+- After the loaded-device DERP handshake exhausted heap, the initial-map scratch
+  became a dynamic coordination-task lease: registration retains it for the
+  initial map, which always releases it on return. Disconnect, reconnect and
+  task exit also release it. Streaming maps allocate only their declared bounded
+  length. Noise decrypts in place after authentication; HTTP/2 DATA fragments
+  feed map framing directly, without a second retained H2 DATA body. Padded DATA
+  and flow-control accounting retain the original frame semantics and limits.

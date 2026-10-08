@@ -47,7 +47,13 @@ String idText(int id) { if(id<0) return "";char text[5];snprintf(text,sizeof tex
 int idValue(JsonVariantConst value) { int id=-1;rb::parseId(value.as<const char*>(),id);return id; }
 String randomHex(unsigned bytes=16) { String value;value.reserve(bytes*2);for(unsigned i=0;i<bytes;i+=4) { char b[9];snprintf(b,sizeof b,"%08lx",static_cast<unsigned long>(esp_random()));value+=b; }return value; }
 void logEvent(const char* text) { logs[logIndex++%32]=String(millis()/1000)+" "+text; }
-void jsonReply(int code,JsonDocument& doc) { String data;serializeJson(doc,data);server.sendHeader("Cache-Control","no-store");server.send(code,"application/json",data); }
+void jsonReply(int code,JsonDocument& doc) {
+    server.sendHeader("Cache-Control","no-store");String data;size_t expected=measureJson(doc);
+    if(doc.overflowed()||!data.reserve(expected+1)||serializeJson(doc,data)!=expected||data.length()!=expected) {
+        server.send(503,"application/json","{\"error\":\"MEMORY_BUSY\"}");return;
+    }
+    server.send(code,"application/json",data);
+}
 void errorReply(int code,const char* error) { JsonDocument doc;doc["error"]=error;jsonReply(code,doc); }
 void savedReply(int code=200,bool restarting=false) { JsonDocument doc;doc["saved"]=true;doc["restarting"]=restarting;jsonReply(code,doc); }
 bool body(JsonDocument& doc) {

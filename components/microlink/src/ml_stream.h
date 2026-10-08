@@ -13,6 +13,7 @@ typedef struct {
     size_t header_used, length, used;
     uint8_t *payload;
     bool payload_borrowed;
+    uint8_t padding;
 } ml_frame_reader;
 
 static inline void ml_frame_reset(ml_frame_reader *r) {
