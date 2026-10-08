@@ -1,13 +1,15 @@
 # Instalação, atualização e recuperação
 
+Guia completo em ordem de instalação: [English](../README.md) | [Português (Brasil)](../README.pt-BR.md).
+
 ## Configurar cada PC
 
 1. Configure Wi-Fi e a rede da ESP32 em `config.local.json`, grave o firmware e abra a dashboard pelo IP reservado. A API v2 usa o token administrativo; não há SoftAP de recuperação.
-2. Na dashboard, crie um PC e copie seu ID de 32 caracteres hexadecimais minúsculos e MAC Ethernet. Há limite de quatro PCs.
+2. Na dashboard, crie um PC com nome e MAC Ethernet. Há limite de quatro PCs. O PC ID é interno, gerado automaticamente e salvo na configuração do agent após o pareamento; não é necessário procurá-lo na interface.
 3. Em **Pareamento**, abra uma janela temporária e instale o agent nativo no sistema operacional do PC. Use o código exibido pelo agent e associe-o ao PC correto na dashboard; aprove a solicitação. O agent grava configuração protocol 2, verifica hello/catálogo e confirma o pareamento. Repita para outros sistemas operacionais, se necessário. Há até oito agents no total; apenas uma sessão ativa por PC.
 4. O agent descobre e sincroniza apenas o catálogo do PC pareado. Confirme na dashboard as entradas `Boot####`; são aceitas até 24 por PC. Defina padrão/fallback e teste cada destino antes de habilitar o boot remoto.
-5. Compile o iPXE para esse PC com `build.sh ESP_IPV4 PC_ID [output-dir] [timeout-ms]`. O builder aceita somente PC ID com 32 caracteres hexadecimais minúsculos e embute `http://ESP_IPV4/boot/PC_ID.ipxe`. O manifesto registra IP, PC ID e SHA-256 de iPXE e loader. Mantenha os arquivos juntos.
-6. Execute o installer da plataforma como administrador/root, fornecendo o diretório de artefatos gerados. O installer lê `pc_id` e URL da configuração pareada do agent e valida manifesto, PC alvo e hashes antes de escrever na ESP. Ele salva backup e preserva BootOrder. Não use a imagem iPXE de um PC para outro.
+5. No Linux real do PC, `sudo bash installer/linux/install.sh` lê o vínculo salvo e compila/instala automaticamente; não informe um ID manualmente. Para instalar pelo Windows, leia apenas `.pc_id` da configuração pareada do agent e compile em Linux/WSL com `build.sh ESP_IPV4 PC_ID [output-dir] [timeout-ms]`. O builder aceita somente PC ID com 32 caracteres hexadecimais minúsculos e embute `http://ESP_IPV4/boot/PC_ID.ipxe`. O manifesto registra IP, PC ID e SHA-256 de iPXE e loader. Mantenha os arquivos juntos.
+6. No Windows, execute o installer EFI como administrador, fornecendo o arquivo iPXE gerado; mantenha loader e manifesto na mesma pasta. No Linux, continue os prompts do installer iniciado na etapa anterior. O installer lê `pc_id` e URL da configuração pareada do agent e valida manifesto, PC alvo e hashes antes de escrever na ESP. Ele salva backup e preserva BootOrder. Não use a imagem iPXE de um PC para outro.
 
 Consulte [Agent nativo C#](native-agent.md) para instalação, permissões e atualização. O agent residente é NativeAOT e usa WebSocket; os scripts PowerShell/Bash são instaladores. Não há sincronização HTTP legada nem token global de agent. Uma troca de PC exige novo vínculo/configuração e os artefatos iPXE daquele PC.
 
