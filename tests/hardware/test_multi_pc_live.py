@@ -16,6 +16,7 @@ from websockets.sync.client import connect
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--url", required=True)
+parser.add_argument("--tailscale-url")
 parser.add_argument("--credential-file", type=Path, required=True)
 parser.add_argument("--prepare", action="store_true")
 parser.add_argument("--soak-seconds", type=int, default=120)
@@ -207,6 +208,17 @@ try:
     if tailscale_expected:
         assert tailscale_samples>=10,"Tailscale control and DERP must remain connected under capacity load"
         check("Tailscale control and DERP online during full-capacity soak")
+    if args.tailscale_url:
+        lan_url=args.url
+        try:
+            args.url=args.tailscale_url
+            assert len(api("/api/v2/bootstrap")["pcs"])==4
+            sockets[0].close();time.sleep(.3)
+            sockets[0]=connect_agent(bindings[0])
+            sync(bindings[0],[{"id":f"{n+1:04X}","name":"VPN system "+str(n+1)} for n in range(24)])
+            check("authenticated HTTP, agent WebSocket and catalog sync through Tailscale")
+        finally:
+            args.url=lan_url
     assert args.soak_seconds>=61, "Rate-limit reset requires at least 61 seconds soak"
     for i,pc in enumerate(created):
         extra=approve_pair(start_pair(),pc)
