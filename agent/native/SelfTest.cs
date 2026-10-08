@@ -81,7 +81,7 @@ public static class SelfTest {
         } finally { wsListener.Stop();httpListener.Stop(); }
     }
     public static int Run() {
-        Assert(Config.ValidToken("senha 8"));
+        Assert(Config.ValidToken("senha 8!"));
         Assert(Config.ValidToken("!@#$%^&*"));
         Assert(!Config.ValidToken("curta7"));
         Assert(!Config.ValidToken("linha\nquebrada"));
