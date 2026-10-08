@@ -58,7 +58,7 @@ function storeRememberedLogin(storage,value,remember){try{if(remember&&value)sto
 globalThis.RemoteBootValidation={validateCredential,validateTailscaleAuthKey,validateSinric,formatTailscaleStatus,createStatusPoller,statusControls,rememberedLogin,storeRememberedLogin};
 if(typeof document!=='undefined'){
 const $=id=>document.getElementById(id);
-let token='',cfg={},systems=[],slots=[],refreshTimer,statusPoller,statusRequest;
+let initialSetup=false,token='',cfg={},systems=[],slots=[],refreshTimer,statusPoller,statusRequest;
 const pageNames={overview:'Visão geral',boot:'Boot',settings:'Configuração',sinric:'Sinric Pro',system:'Sistema'};
 const fields=[
   ['Rede','Wi-Fi definido manualmente em config.local.json',[
@@ -79,7 +79,7 @@ const fields=[
 function icon(name){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#icon-'+name);svg.append(use);return svg}
 function message(text){$('message').textContent=text}
 function showToast(text,error=false){const host=$(error?'toastAlert':'toastStatus');const item=document.createElement('div');item.className='toast'+(error?' error':'');item.textContent=text;host.append(item);setTimeout(()=>item.remove(),4600);message(text)}
-function apiError(code){const known={AUTH_REQUIRED:'Informe o token administrativo.',FORBIDDEN:'Token inválido ou sem permissão.',INVALID_CONFIG:'Revise os campos destacados.',SCHEMA_LOCKED:'A configuração está bloqueada por incompatibilidade.',PC_ALREADY_ON:'O computador já está online.',SINRIC_CREDENTIALS_REQUIRED:'Informe App Key e App Secret antes de ativar o Sinric.'};return known[code]?known[code]+' ('+code+')':code}
+function apiError(code){const known={AUTH_REQUIRED:'Informe a senha administrativa.',FORBIDDEN:'Senha inválida ou sem permissão.',INVALID_PASSWORD:'Use de 8 a 128 caracteres.',PASSWORD_MISMATCH:'As senhas não coincidem.',SETUP_CLOSED:'A senha inicial já foi configurada.',INVALID_CONFIG:'Revise os campos destacados.',SCHEMA_LOCKED:'A configuração está bloqueada por incompatibilidade.',PC_ALREADY_ON:'O computador já está online.',SINRIC_CREDENTIALS_REQUIRED:'Informe App Key e App Secret antes de ativar o Sinric.'};return known[code]?known[code]+' ('+code+')':code}
 async function api(path,method='GET',data){
   let response;const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),8000);
   try{
@@ -198,7 +198,7 @@ function updateStatusCards(state){
 }
 function applyStatus(state){
   $('shutdown').disabled=statusControls(state).shutdownDisabled;updateStatusCards(state);
-  $('setupInfo').textContent=state.config_locked?'Configuração preservada, porém incompatível ou corrompida.':state.setup_mode?'Configure MAC e duas senhas diferentes para concluir.':'Campos de senha vazios mantêm os valores existentes.'
+  $('setupInfo').textContent=state.config_locked?'Configuração preservada, porém incompatível ou corrompida.':state.setup_mode?'Configure o MAC e a senha do agent para concluir.':'Campos de senha vazios mantêm os valores existentes.'
 }
 function status(){
   if(statusRequest)return statusRequest;
@@ -206,6 +206,7 @@ function status(){
   return statusRequest
 }
 async function connect(){
+  if(initialSetup){await saveInitialPassword();return}
   token=$('token').value;$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
   try{
     const initial=await api('bootstrap');storeRememberedLogin(localStorage,token,$('rememberLogin').checked);cfg=initial.config;systems=cfg.systems||[];slots=cfg.sinric_slots||[];$('login').hidden=true;$('app').hidden=false;renderFields();renderEntries();renderSinric();renderButtons();applyStatus(initial.status);clearInterval(refreshTimer);statusPoller=createStatusPoller({poll:()=>status().catch(error=>showToast(error.message,true)),isHidden:()=>document.hidden});refreshTimer=setInterval(statusPoller.tick,15000);showToast('Dashboard conectada.')
@@ -229,7 +230,28 @@ function collectPatch(validatedSlots=slots){
   patch.systems=systems;patch.sinric_slots=validatedSlots;return patch
 }
 $('connect').onclick=connect;$('token').addEventListener('keydown',event=>{if(event.key==='Enter')connect()});$('rememberLogin').addEventListener('change',()=>{if(!$('rememberLogin').checked)storeRememberedLogin(localStorage,'',false)});
-const savedLogin=rememberedLogin(localStorage);if(savedLogin){$('token').value=savedLogin;$('rememberLogin').checked=true;connect()}
+async function saveInitialPassword(){
+  $('loginError').hidden=true;
+  const password=$('token').value;
+  if(!validateCredential(password)||password!==$('repeatPassword').value){$('loginError').textContent=!validateCredential(password)?'Use de 8 a 128 caracteres sem caracteres de controle.':'As senhas não coincidem.';$('loginError').hidden=false;return}
+  setBusy($('connect'),true,'Salvando');
+  try{await api('setup','POST',{password,repeat_password:$('repeatPassword').value});storeRememberedLogin(localStorage,'',false);$('token').value='';$('repeatPassword').value='';$('loginHelp').textContent='Senha salva. A ESP está reiniciando…';setTimeout(()=>location.reload(),6500)}
+  catch(error){$('loginError').textContent=error.message;$('loginError').hidden=false;setBusy($('connect'),false)}
+}
+async function initializeLogin(){
+  setBusy($('connect'),true,'Carregando');
+  try{
+    const setup=await api('setup');if(setup.config_locked)throw Error('A configuração salva está incompatível ou corrompida. É necessário recuperar a ESP.');initialSetup=setup.required===true;
+    $('repeatPasswordField').hidden=!initialSetup;$('rememberLoginField').hidden=initialSetup;
+    $('passwordLabel').textContent=initialSetup?'Senha':'Senha administrativa';
+    $('token').autocomplete=initialSetup?'new-password':'current-password';
+    $('loginHelp').textContent=initialSetup?'Crie sua senha administrativa para começar.':'Entre com sua senha administrativa.';
+    setBusy($('connect'),false);$('connect').querySelector('span').textContent=initialSetup?'Salvar e reiniciar ESP':'Conectar';
+    if(!initialSetup){const savedLogin=rememberedLogin(localStorage);if(savedLogin){$('token').value=savedLogin;$('rememberLogin').checked=true;await connect()}}
+  }catch(error){$('loginError').textContent=error.message;$('loginError').hidden=false;setBusy($('connect'),false)}
+}
+$('repeatPassword').addEventListener('keydown',event=>{if(event.key==='Enter')connect()});
+initializeLogin();
 document.addEventListener('visibilitychange',()=>statusPoller?.visibilityChanged());
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>setActiveView(button.dataset.view)));
 $('refreshStatus').onclick=button=>action(()=>status(),button.currentTarget,'Status atualizado.');

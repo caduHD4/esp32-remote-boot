@@ -37,12 +37,13 @@
     <h1 id="login-title">Remote Boot</h1>
     <p class="muted">Controle seguro de inicialização na sua rede local.</p>
     <label class="field">
-      <span>Senha administrativa</span>
+      <span id="passwordLabel">Senha administrativa</span>
       <span class="input-wrap"><svg><use href="#icon-system"/></svg><input id="token" type="password" autocomplete="current-password" placeholder="Digite sua senha"></span>
     </label>
-    <label class="login-remember"><input id="rememberLogin" type="checkbox"><span>Permanecer conectado neste navegador</span></label>
+    <label id="repeatPasswordField" class="field" hidden><span>Repetir senha</span><input id="repeatPassword" type="password" autocomplete="new-password" placeholder="Repita sua senha"></label>
+    <label id="rememberLoginField" class="login-remember"><input id="rememberLogin" type="checkbox"><span>Permanecer conectado neste navegador</span></label>
     <button id="connect" class="button primary wide" type="button"><svg><use href="#icon-power"/></svg><span>Conectar</span></button>
-    <p class="login-help">No primeiro acesso, use a senha temporária exibida no monitor serial.</p>
+    <p id="loginHelp" class="login-help">Entre com sua senha administrativa.</p>
     <p id="loginError" class="inline-alert" role="alert" hidden></p>
   </div>
 </section>

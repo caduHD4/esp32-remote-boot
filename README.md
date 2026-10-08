@@ -29,7 +29,7 @@ Baixe também **Source code (zip)** da mesma versão para obter os installers. A
    ```
 
 4. A ESP32 conecta somente à LAN configurada. Não existe SoftAP, captive portal ou AP de recuperação. Se a rede estiver indisponível, ela tenta reconectar automaticamente sem bloquear o firmware. Abra o IP exibido no monitor serial.
-5. No primeiro acesso, use a senha temporária de 8 caracteres exibida no serial e defina duas senhas **diferentes** para admin e agent. Cada uma aceita 8–128 caracteres, exceto caracteres de controle. Wi-Fi é alterado apenas em `config.local.json`, seguido de novo upload.
+5. No primeiro acesso, preencha **Senha** e **Repetir senha** e clique em **Salvar e reiniciar ESP**. Depois do reinício, entre com sua senha administrativa e configure o MAC e uma senha **diferente** para o agent no painel. Cada senha aceita 8–128 caracteres, exceto caracteres de controle. Wi-Fi é alterado apenas em `config.local.json`, seguido de novo upload.
 6. Salve e abra o IP da ESP32 com o token administrativo. Reserve o IP no DHCP. O endereço é embutido no build iPXE e não deve mudar.
 6. Configure UEFI/WoL seguindo `docs/bios.md`, `docs/linux-wol.md` e `docs/windows-wol.md`.
 7. Execute o installer do host e sincronize as entradas UEFI na dashboard. Mapeie dois Switches Sinric Pro: um para cada entrada. O fluxo guiado está em `docs/sinric.md`.

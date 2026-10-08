@@ -21,8 +21,8 @@
 constexpr char Version[]="2.2.2-no-ap-reliable-wifi";
 WebServer server(80); WiFiUDP udp; Preferences nvs;
 JsonDocument config; rb::State state;
-bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false,setupCredentialReported=false;
-String setupKey,osName,hostName,logs[32],agentSession;
+bool setupMode=false,locked=false,sinricOnline=false,sinricStarted=false,agentRebootEnabled=false,agentShutdownEnabled=false,wifiAddressReported=false;
+String osName,hostName,logs[32],agentSession;
 rb::PowerCommand powerCommand;
 rb::WiFiReconnectPolicy wifiReconnect;
 rb::MicrolinkRuntime microlink;
@@ -47,7 +47,7 @@ bool auth(bool agent=false) {
     String supplied=server.header("Authorization");
     if(!supplied.startsWith("Bearer ")) { errorReply(401,"AUTH_REQUIRED"); return false; }
     supplied.remove(0,7);
-    const char* admin=setupMode && !config["admin_token"].is<const char*>()?setupKey.c_str():config["admin_token"].as<const char*>();
+    const char* admin=config["admin_token"].as<const char*>();
     if(rb::tokenEqual(supplied.c_str(),admin) || (agent && rb::tokenEqual(supplied.c_str(),config["agent_token"].as<const char*>()))) return true;
     errorReply(403,"FORBIDDEN"); return false;
 }
@@ -57,7 +57,7 @@ bool body(JsonDocument& doc) {
     return true;
 }
 String randomToken() { char b[33]; for(int i=0;i<4;++i) snprintf(b+i*8,9,"%08lx",static_cast<unsigned long>(esp_random())); return b; }
-String randomSetupCredential() { char b[9]; snprintf(b,sizeof b,"%08lx",static_cast<unsigned long>(esp_random())); return b; }
+
 void defaults(JsonDocument& d) {
     d["config_version"]=2; d["pc_name"]="PC"; d["dhcp"]=true;
     d["wol_port"]=9; d["wol_repeat"]=5; d["wol_interval_ms"]=100;
@@ -178,6 +178,18 @@ void routes() {
         else script+="exit\n";
         server.sendHeader("Cache-Control","no-store"); server.send(200,"text/plain",script);
     });
+    server.on("/api/v1/setup",HTTP_GET,[]{ JsonDocument d; d["required"]=!locked&&!rb::validCredential(config["admin_token"].as<const char*>()); d["config_locked"]=locked; jsonReply(200,d); });
+    server.on("/api/v1/setup",HTTP_POST,[]{
+        if(locked||rb::validCredential(config["admin_token"].as<const char*>())) { errorReply(409,"SETUP_CLOSED"); return; }
+        JsonDocument input; if(!body(input)) return;
+        const char* password=input["password"].as<const char*>();
+        const char* repeated=input["repeat_password"].as<const char*>();
+        if(!rb::validCredential(password)) { errorReply(400,"INVALID_PASSWORD"); return; }
+        if(!repeated||strcmp(password,repeated)!=0) { errorReply(400,"PASSWORD_MISMATCH"); return; }
+        if(nvs.putString("initial_admin",password)!=strlen(password)) { errorReply(500,"NVS_WRITE_FAILED"); return; }
+        config["admin_token"]=password;
+        JsonDocument reply; reply["saved"]=true; reply["restarting"]=true; jsonReply(200,reply); restartAt=millis()+1500;
+    });
     server.on("/api/v1/status",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; appendStatus(d.to<JsonObject>()); jsonReply(200,d); });
     server.on("/api/v1/config",HTTP_GET,[]{ if(!auth()) return; JsonDocument d; rb::redactConfig(config,d);
         jsonReply(200,d);
@@ -190,7 +202,7 @@ void routes() {
         if(rb::sinricReadiness(next["sinric_enabled"].as<bool>(),next["sinric_app_key"]|"",next["sinric_app_secret"]|"")==rb::SinricReadiness::MissingCredentials) { errorReply(400,"SINRIC_CREDENTIALS_REQUIRED"); return; }
         if(!validate(next)) { errorReply(400,"INVALID_CONFIG"); return; }
         if(!persist(next)) { errorReply(500,"NVS_WRITE_FAILED"); return; }
-        config.set(next); reloadState(); JsonDocument d; d["saved"]=true; d["restarting"]=true; jsonReply(200,d); restartAt=millis()+1500;
+        nvs.remove("initial_admin"); config.set(next); reloadState(); JsonDocument d; d["saved"]=true; d["restarting"]=true; jsonReply(200,d); restartAt=millis()+1500;
     });
     server.on("/api/v1/systems",HTTP_GET,[]{ if(!auth(true)) return; JsonDocument d; d["systems"]=config["systems"]; jsonReply(200,d); });
     server.on("/api/v1/systems/sync",HTTP_POST,[]{ if(!auth(true)) return; if(locked) { errorReply(409,"SCHEMA_LOCKED"); return; }
@@ -359,6 +371,7 @@ void setup() {
             else { config.set(loaded); if(schema==1&&!persist(config)) locked=true; }
         }
     }
+    if(!stored.length()) { String initialAdmin=nvs.getString("initial_admin",""); if(rb::validCredential(initialAdmin.c_str())) config["admin_token"]=initialAdmin; }
     state.lastSelected=nvs.getInt("last",-1); reloadState();
     WiFi.persistent(false); WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setAutoReconnect(true);
     if(!hasLocalWiFi()) {
@@ -367,7 +380,7 @@ void setup() {
         config["ssid"]=REMOTE_BOOT_LOCAL_WIFI_SSID;
         config["wifi_password"]=REMOTE_BOOT_LOCAL_WIFI_PASSWORD;
         if(!stored.length()) {
-            setupMode=true; setupKey=randomSetupCredential();
+            setupMode=true;
             logEvent("SETUP_WIFI_WAIT");
         }
         if(!config["dhcp"].as<bool>()) { IPAddress ip,mask,gateway,resolver; ip.fromString(config["ip"].as<const char*>()); mask.fromString(config["subnet"].as<const char*>()); gateway.fromString(config["gateway"].as<const char*>()); resolver.fromString(config["dns"].as<const char*>()); WiFi.config(ip,gateway,mask,resolver); }
@@ -380,11 +393,9 @@ void loop() {
     if(sinricStarted && microlink.beginSinricHandle(sinricOnline)) { SinricPro.handle(); microlink.endSinricHandle(sinricOnline,[]{ SinricPro.stop(); SinricPro.begin(config["sinric_app_key"].as<const char*>(),config["sinric_app_secret"].as<const char*>()); }); for(int i=0;i<8;++i) if(rb::sinricResetDue(slotReset[i],millis())) { SinricProSwitch& d=SinricPro[slotIds[i]]; slotReset[i]=rb::nextSinricReset(millis(),d.sendPowerStateEvent(false)); } }
     const bool wifiConnected=WiFi.status()==WL_CONNECTED;
     wifiReconnect.observe(wifiConnected,millis());
-    if(wifiConnected&&setupMode&&!setupCredentialReported) {
+    if(wifiConnected&&!wifiAddressReported) {
         Serial.println("Wi-Fi connected: "+WiFi.localIP().toString());
-        Serial.println("Setup access token: "+setupKey);
-        setupCredentialReported=true;
-        logEvent("SETUP_TOKEN_READY");
+        wifiAddressReported=true;
     }
     // Arduino's STA auto-reconnect owns reconnects after the first begin().
     // Calling WiFi.begin() again while the IDF driver is associating clears
