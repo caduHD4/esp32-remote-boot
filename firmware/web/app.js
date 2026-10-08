@@ -100,7 +100,7 @@ function setActiveView(name){
   if(!pageNames[name])return;
   document.querySelectorAll('.view').forEach(view=>{const active=view.id==='view-'+name;view.hidden=!active;view.classList.toggle('active',active)});
   document.querySelectorAll('[data-view]').forEach(button=>button.classList.toggle('active',button.dataset.view===name));
-  $('pageTitle').textContent=pageNames[name];window.scrollTo({top:0,behavior:'smooth'})
+  $('pageTitle').textContent=pageNames[name];window.scrollTo({top:0,behavior:'auto'})
 }
 function choices(input,value,kind,entries=systems){
   const add=(v,t)=>{const option=document.createElement('option');option.value=v;option.textContent=t;input.append(option)};
@@ -176,7 +176,7 @@ function renderSlots(){
 }
 function updateSlotWarning(){$('slotWarning').hidden=!($('f_sinric_enabled').checked&&slots.length===0)}
 function renderSinric(){
-  fillPcSelect($('sinricPc'),cfg.sinric_pc_id,true);$('sinricPc').dataset.previous=cfg.sinric_pc_id||'';loadSinricCatalog().catch(e=>showToast(e.message,true));
+  fillPcSelect($('sinricPc'),cfg.sinric_pc_id,true);$('sinricPc').dataset.previous=cfg.sinric_pc_id||'';$('addSlot').disabled=!cfg.sinric_pc_id;loadSinricCatalog().catch(e=>showToast(e.message,true));
   $('f_sinric_enabled').checked=!!cfg.sinric_enabled;$('f_sinric_app_key').value='';$('f_sinric_app_secret').value='';
   $('f_sinric_app_key').placeholder=cfg.sinric_app_key_set?'Já configurada; vazio mantém':'Informe a App Key';
   $('f_sinric_app_secret').placeholder=cfg.sinric_app_secret_set?'Já configurado; vazio mantém':'Informe o App Secret';
@@ -252,7 +252,7 @@ function renderAgents(){
   }
 }
 async function refreshAgents(){agents=(await api('agents')).agents.map(agent=>({...agent,id:agent.agent_id||agent.id}));renderAgents()}
-async function loadSinricCatalog(){const id=$('sinricPc').value;sinricSystems=[];renderSlots();$('sinricCatalogInfo').textContent=id?'Carregando catálogo do PC escolhido…':'Escolha o único PC controlado pela integração.';if(!id)return;const entries=await catalog(id);if($('sinricPc').value!==id)return;sinricSystems=entries;renderSlots();$('sinricCatalogInfo').textContent=entries.length?'Os dispositivos controlam somente este PC.':'PC sem catálogo. Conecte um agent e sincronize antes de mapear sistemas.'}
+async function loadSinricCatalog(){const id=$('sinricPc').value;sinricSystems=[];renderSlots();$('sinricCatalogInfo').textContent=id?'Carregando catálogo do PC escolhido…':'Escolha o único PC controlado pela integração.';if(!id)return;const entries=await catalog(id);if($('sinricPc').value!==id)return;sinricSystems=entries;renderSlots();$('sinricCatalogInfo').textContent=id!==(cfg.sinric_pc_id||'')?'Salve a troca de PC antes de adicionar dispositivos.':entries.length?'Os dispositivos controlam somente este PC.':'PC sem catálogo. Conecte um agent e sincronize antes de mapear sistemas.'}
 async function connect(){
   if(initialSetup){await saveInitialPassword();return}
   token=$('token').value;$('loginError').hidden=true;setBusy($('connect'),true,'Conectando');
@@ -301,7 +301,7 @@ document.addEventListener('visibilitychange',()=>statusPoller?.visibilityChanged
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>setActiveView(button.dataset.view)));
 $('refreshStatus').onclick=button=>action(()=>status(),button.currentTarget,'Status atualizado.');
 $('showHidden').onchange=renderButtons;
-$('addSlot').onclick=()=>{if(slots.length<8){slots.push({device_id:'',boot_id:'default'});renderSlots()}else showToast('O limite é de 8 dispositivos.',true)};
+$('addSlot').onclick=()=>{if($('sinricPc').value!==(cfg.sinric_pc_id||'')){showToast('Salve a troca de PC antes de adicionar dispositivos.',true);return}if(slots.length<8){slots.push({device_id:'',boot_id:'default'});renderSlots()}else showToast('O limite é de 8 dispositivos.',true)};
 $('settings').onsubmit=async event=>{
   event.preventDefault();const sinric=!$('view-sinric').hidden;const buttons=[...document.querySelectorAll('.save-button')];
   try{
@@ -310,7 +310,7 @@ $('settings').onsubmit=async event=>{
       if(!validation.valid){showFieldErrors(validation.errors);throw Error('Revise os campos do Sinric.')}if($('f_sinric_enabled').checked&&!$('sinricPc').value)throw Error('Selecione o PC controlado pelo Sinric.');
       patch={sinric_pc_id:$('sinricPc').value,sinric_enabled:$('f_sinric_enabled').checked,sinric_slots:validation.slots};for(const key of ['sinric_app_key','sinric_app_secret'])if($('f_'+key).value)patch[key]=$('f_'+key).value;path='integrations/sinric';
     }else{patch=collectPatch();if(patch.admin_token&&!validateCredential(patch.admin_token))throw Error('Senha administrativa deve conter 8–128 caracteres.');if(!validateTailscaleAuthKey(patch.tailscale_auth_key||''))throw Error('Use uma Auth Key tskey-auth- válida.');path='config'}
-    buttons.forEach(button=>setBusy(button,true,'Salvando'));await api(path,'PUT',patch);for(const [key,value] of Object.entries(patch)){if(['admin_token','tailscale_auth_key','sinric_app_key','sinric_app_secret'].includes(key)){cfg[key+'_set']=true;$('f_'+key).value=''}else cfg[key]=value}if(patch.admin_token){token=patch.admin_token;storeRememberedLogin(localStorage,token,$('rememberLogin').checked)}showToast(sinric?'Sinric salvo.':'Configuração global salva.');
+    buttons.forEach(button=>setBusy(button,true,'Salvando'));await api(path,'PUT',patch);for(const [key,value] of Object.entries(patch)){if(['admin_token','tailscale_auth_key','sinric_app_key','sinric_app_secret'].includes(key)){cfg[key+'_set']=true;$('f_'+key).value=''}else cfg[key]=value}if(sinric){$('addSlot').disabled=!cfg.sinric_pc_id;$('sinricCatalogInfo').textContent=sinricSystems.length?'Os dispositivos controlam somente este PC.':'Conecte um agent e sincronize o catálogo antes de mapear sistemas.';}if(patch.admin_token){token=patch.admin_token;storeRememberedLogin(localStorage,token,$('rememberLogin').checked)}showToast(sinric?'Sinric salvo.':'Configuração global salva.');
   }catch(e){showToast(e.message,true)}finally{buttons.forEach(button=>setBusy(button,false))}
 };
 $('shutdown').onclick=event=>{const context=pcModel.capture(),pc=pcs.find(pc=>pc.id===context.pcId);if(pc&&confirm('Desligar '+pc.name+'? Salve seu trabalho antes.'))action(()=>pcApi(context,'shutdown','POST',{confirm:'SHUTDOWN'}),event.currentTarget,'Desligamento solicitado.')};
@@ -320,7 +320,7 @@ $('addPc').onclick=()=>{$('pcError').textContent='';$('newPcForm').reset();$('pc
 $('newPcForm').onsubmit=async event=>{event.preventDefault();const button=event.submitter;setBusy(button,true);try{const result=await api('pcs','POST',{name:$('newPcName').value.trim(),mac:$('newPcMac').value.trim(),wol_port:9,wol_repeat:3,wol_interval_ms:100,pending_ttl_s:30,physical_boot_behavior:'default_target',default_target:'',fallback_boot_id:''});result.pc.id=result.pc.pc_id||result.pc.id;pcs.push(result.pc);$('pcDialog').close();pairingUi.updatePcs(result.pc.id);await selectPc(result.pc.id);($('pairingDialog').open?$('pairPc'):$('pcSelect')).focus()}catch(e){$('pcError').textContent=e.message}finally{setBusy(button,false)}};
 $('savePc').onclick=async event=>{if(!catalogReady)return;const button=event.currentTarget;const context=pcModel.capture(),patch={};for(const [key,,type] of pcFields){const field=$('pc_'+key);patch[key]=type==='number'?Number(field.value):field.value}const entries=systems.map(entry=>({...entry}));setBusy(button,true);try{const result=await pcApi(context,'','PUT',patch);if(!pcModel.current(context))return;Object.assign(pcs.find(pc=>pc.id===context.pcId),result.pc||patch);await pcApi(context,'systems','PUT',{systems:entries});renderPcCards();showToast('Ajustes do PC salvos.')}catch(e){if(e.message!=='STALE_REQUEST')showToast(e.message,true)}finally{setBusy(button,false);button.disabled=!catalogReady}};
 $('removePc').onclick=async()=>{const context=pcModel.capture(),pc=pcs.find(pc=>pc.id===context.pcId);if(!pc||!confirm('Remover '+pc.name+' e revogar todos os seus agents?'))return;try{await api('pcs/'+context.pcId,'DELETE',{confirm:'DELETE_PC'});pcs=pcs.filter(pc=>pc.id!==context.pcId);agents=agents.filter(agent=>agent.pc_id!==context.pcId);if(cfg.sinric_pc_id===context.pcId){cfg.sinric_pc_id='';cfg.sinric_enabled=false;cfg.sinric_slots=[];slots=[];renderSinric()}renderAgents();pairingUi.updatePcs();if(pcModel.current(context))await selectPc(pcs[0]?.id||'');else renderPcCards()}catch(e){showToast(e.message,true)}};
-$('sinricPc').onchange=()=>{const previous=$('sinricPc').dataset.previous||'',next=$('sinricPc').value;if(next!==previous&&!confirm('Trocar o PC do Sinric? Todos os mapeamentos anteriores serão apagados ao salvar.')){$('sinricPc').value=previous;return}$('sinricPc').dataset.previous=next;slots=[];renderSlots();loadSinricCatalog().catch(e=>showToast(e.message,true))};
+$('sinricPc').onchange=()=>{const previous=$('sinricPc').dataset.previous||'',next=$('sinricPc').value;if(next!==previous&&!confirm('Trocar o PC do Sinric? Todos os mapeamentos anteriores serão apagados ao salvar.')){$('sinricPc').value=previous;return}$('sinricPc').dataset.previous=next;$('addSlot').disabled=!next||next!==(cfg.sinric_pc_id||'');slots=[];renderSlots();loadSinricCatalog().catch(e=>showToast(e.message,true))};
 const pairingUi=RemoteBootPairing({api,pcs:()=>pcs,refresh:async()=>{await refreshAgents();showToast('Vínculo aprovado. Aguardando conexão do agent.');setActiveView('system')},onError:text=>showToast(text,true)});
 $('pairAgent').onclick=event=>pairingUi.open(event.currentTarget);
 $('readLogs').onclick=async event=>{const button=event.currentTarget;setBusy(button,true,'Carregando');try{$('logs').textContent=(await api('logs')).logs.join('\n')||'Nenhum evento registrado.'}catch(error){showToast(error.message,true)}finally{setBusy(button,false)}};

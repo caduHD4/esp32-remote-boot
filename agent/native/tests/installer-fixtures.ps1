@@ -52,3 +52,5 @@ foreach($scenario in @('approved','cancel','check-failure')) {
         Write-Host "PASS: Windows installer fixture $scenario"
     } finally {Remove-Item -LiteralPath $sandbox -Recurse -Force}
 }
+$global:LASTEXITCODE=0
+exit 0

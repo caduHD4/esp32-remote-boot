@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: sudo apt-get update && sudo apt-get install -y gnu-efi liblzma-dev jq shellcheck
+      - run: sudo apt-get update && sudo apt-get install -y gnu-efi liblzma-dev jq shellcheck ripgrep
       - run: pip install platformio==6.1.19
       - run: bash tests/run.sh && pio run -e esp32c3_4mb && make -C uefi/remote-boot
       - run: bash ipxe/build.sh 192.0.2.10 00112233445566778899aabbccddeeff
