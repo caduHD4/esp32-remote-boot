@@ -16,6 +16,8 @@
 | PC não liga | Fonte independente ESP32, NIC Ethernet com energia, WoL no último OS desligado, ErP, Fast Startup, broadcast/isolamento do AP. |
 | 409 PC_ALREADY_ON | Boot normal não reinicia. Use reboot explícito com agent ou force somente para reenviar WoL. |
 | iPXE não obtém rede | Confirme cabo, DHCP, driver iPXE, net0 e VLAN. Builder usa primeira NIC; setups multi-NIC precisam ajuste. |
+| `net0 no such network device` | A interface não foi detectada. Placas sem driver nativo na revisão iPXE usada, como RTL8125 (`10ec:8125`), dependem do driver UEFI/SNP: habilite Network Stack e IPv4 PXE Support na BIOS. Confira as interfaces com `ifstat` no shell iPXE e veja [BIOS e rede UEFI](bios.md#rede-disponível-no-ipxe). |
+| `file:autoexec.ipxe not found` / `file:/autoexec.ipxe not found` | Se o script embutido continua e mostra Remote Boot, investigue o erro posterior; essas mensagens não indicam que seja necessário criar um autoexec.ipxe externo. |
 | iPXE não encontra ESP32 | IP embutido deve ser o IP reservado correto. Rebuild após mudança. Teste GET /boot.ipxe na LAN. |
 | `Cannot identify created entry` | Atualize o repositório. Builds anteriores não reconheciam saídas de `efibootmgr` que exibiam `HD(...)` após o rótulo. Antes de repetir, remova somente a entrada duplicada após comparar seu caminho com `efibootmgr -v`. |
 | EFI NOT_FOUND | Entry/ESP/assinatura/path válidos? Short forms fora de HD() não têm expansão integral. Escolha entry completa/compatível. |

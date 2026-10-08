@@ -67,7 +67,7 @@ Para usar um executável baixado separadamente, passe `-AgentFile CAMINHO` no Wi
 
 ## UEFI/iPXE
 
-Fluxo: Sinric/dashboard → ESP → WoL → iPXE local → `/boot/<pc_id>.ipxe` → `RemoteBoot.efi` embutido → loader local. O PC precisa de Ethernet com WoL e UEFI. Cada imagem iPXE contém o ID do PC; não reutilize imagens entre PCs.
+Fluxo: Sinric/dashboard → ESP → WoL → iPXE local → `/boot/<pc_id>.ipxe` → `RemoteBoot.efi` embutido → loader local. O PC precisa de Ethernet com WoL e UEFI. Cada imagem iPXE contém o ID do PC; não reutilize imagens entre PCs. Placas que dependem do driver de rede UEFI/SNP, como a RTL8125 na revisão iPXE usada, exigem **Network Stack e IPv4 PXE Support habilitados na BIOS**; veja [BIOS e rede UEFI](docs/bios.md#rede-disponível-no-ipxe).
 
 Dependências para construir em Linux: Git, GNU Make/GCC/binutils, GNU-EFI, Perl e liblzma. Ubuntu/Debian:
 

@@ -15,6 +15,11 @@ pc_b=fedcba9876543210fedcba9876543210
 if bash "$root/ipxe/build.sh" 192.0.2.1 >/dev/null 2>&1; then fail 'build accepted missing PC ID'; fi
 if bash "$root/ipxe/build.sh" 192.0.2.1 ABCD "$tmp/invalid" >/dev/null 2>&1; then fail 'build accepted non-lowercase/non-hex PC ID'; fi
 
+# Keep fake build artifacts out of the real source tree.
+fixture_root="$tmp/project"
+mkdir -p "$fixture_root/ipxe" "$fixture_root/uefi/remote-boot"
+cp "$root/ipxe/build.sh" "$root/ipxe/remote-boot.ipxe.in" "$fixture_root/ipxe/"
+
 mkdir -p "$tmp/bin" "$tmp/ipxe/src/bin-x86_64-efi" "$tmp/ipxe/.git"
 cat > "$tmp/bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -24,14 +29,16 @@ cat > "$tmp/bin/make" <<'EOF'
 #!/usr/bin/env bash
 dir=''; [[ $1 != -C ]] || dir=$2
 embed=''; for arg in "$@"; do [[ $arg != EMBED=* ]] || embed=${arg#EMBED=}; done
-if [[ $dir == */uefi/remote-boot ]]; then printf 'MZloader-a' > "$dir/RemoteBoot.efi"
+if [[ $dir == */uefi/remote-boot ]]; then
+    [[ " $* " == *" -B "* ]] || { echo 'Loader build must force regeneration' >&2; exit 1; }
+    printf 'MZloader-a' > "$dir/RemoteBoot.efi"
 elif [[ $dir == */ipxe/src ]]; then printf 'MZ' > "$dir/bin-x86_64-efi/ipxe.efi"; cat "${embed%%,*}" >> "$dir/bin-x86_64-efi/ipxe.efi"
 fi
 EOF
 chmod +x "$tmp/bin/git" "$tmp/bin/make"
 export PATH="$tmp/bin:$PATH" IPXE_SOURCE="$tmp/ipxe"
-bash "$root/ipxe/build.sh" 192.0.2.1 "$pc_a" "$tmp/out-a" 5000 >/dev/null
-bash "$root/ipxe/build.sh" 192.0.2.1 "$pc_b" "$tmp/out-b" 5000 >/dev/null
+bash "$fixture_root/ipxe/build.sh" 192.0.2.1 "$pc_a" "$tmp/out-a" 5000 >/dev/null
+bash "$fixture_root/ipxe/build.sh" 192.0.2.1 "$pc_b" "$tmp/out-b" 5000 >/dev/null
 grep -q "http://192.0.2.1/boot/$pc_a.ipxe" "$tmp/out-a/remote-boot.ipxe"
 grep -q "http://192.0.2.1/boot/$pc_b.ipxe" "$tmp/out-b/remote-boot.ipxe"
 [[ $(json_field "$tmp/out-a/manifest.json" pc_id) == "$pc_a" ]] || fail 'manifest PC A mismatch'

@@ -20,7 +20,8 @@ if [[ $(git -C "$source_dir" rev-parse HEAD) != "$revision" ]]; then
     git -C "$source_dir" fetch origin "$revision"
     git -C "$source_dir" checkout --detach "$revision"
 fi
-make -C "$root/uefi/remote-boot"
+# Rebuild every loader stage: copied artifacts may have future timestamps.
+make -C "$root/uefi/remote-boot" -B
 sed -e "s/@ESP@/$esp/g" -e "s/@PC_ID@/$pc_id/g" -e "s/@TIMEOUT@/$timeout/g" "$root/ipxe/remote-boot.ipxe.in" > "$out/remote-boot.ipxe"
 cp "$root/uefi/remote-boot/RemoteBoot.efi" "$out/RemoteBoot.efi"
 make -C "$source_dir/src" -j"${JOBS:-4}" bin-x86_64-efi/ipxe.efi "EMBED=$out/remote-boot.ipxe,$out/RemoteBoot.efi" NO_WERROR=1
