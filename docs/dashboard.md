@@ -1,30 +1,19 @@
-# Dashboard
+# Dashboard multi-PC
 
-A dashboard usa HTML/CSS/Vanilla JS e opera totalmente na LAN, sem framework, CDN, fonte remota, LittleFS ou dependência de internet. As três fontes em `firmware/web/` são combinadas durante o build em um único asset gzip/PROGMEM.
+A dashboard usa API v2 e mantém a seleção de PC em cada aba. Cadastre até quatro PCs em **Adicionar PC**, informando nome e MAC da interface Ethernet. O seletor e os cards indicam o destino das ações. Boot, Wake-on-LAN, reinício, desligamento e descoberta usam o identificador desse PC; nomes e Boot IDs repetidos em PCs diferentes não alteram o destino.
 
-## Navegação
+Em **Configuração**, **Salvar ajustes do PC** grava identificação, WoL, comportamento de boot e preferências de exibição do PC selecionado. **Salvar alterações** grava somente configuração global de rede, senha administrativa e Tailscale. Senhas vazias mantêm o valor salvo. Respostas de um PC anterior são canceladas ou descartadas ao trocar a seleção; respostas do catálogo não substituem um nome que esteja sendo editado.
 
-- **Visão geral:** estado do PC, sistema detectado, IP/versão do ESP32, RSSI, Sinric e inicialização rápida.
-- **Boot:** entradas UEFI, WoL, reboot pelo agent, desligamento e atualização do catálogo.
-- **Configuração:** rede, computador, boot, tokens, visibilidade e ordem da dashboard.
-- **Sinric Pro:** ativação, credenciais e até oito dispositivos Switch.
-- **Sistema:** logs, reinício do ESP32 e restauração de fábrica.
+Para vincular uma instalação Windows/Linux, abra **Parear agent**, execute o instalador e digite o código de oito caracteres mostrado por ele. Confira hostname e OS no computador, escolha um PC existente ou **Criar novo PC**, informe um nome para a instalação e marque a confirmação explícita. O código expira em cinco minutos. Cancelar fecha a janela e cancela a solicitação consultada. A dashboard recebe somente identificadores e metadados: nenhuma credencial longa do agent é copiada ou armazenada no navegador.
 
-No desktop, a navegação fica na lateral. Em telas menores ela vira uma faixa fixa no topo. A interface suporta 320 px, controles de toque de pelo menos 44 px, foco visível e `prefers-reduced-motion`.
+**Sistema → Agents vinculados** mostra cada instalação, PC, OS, permissões e presença reportada. Aprovação mostra **Aguardando conexão do agent** até o hello autenticado. Se a ESP reiniciar após a aprovação e antes de o instalador receber a credencial, remova o vínculo que não conectou e repita o pareamento. **Remover vínculo** revoga apenas essa instalação; **Remover PC** revoga suas instalações e limpa as referências Sinric.
 
-Conecte usando o token; ele não é salvo no navegador. A dashboard consulta o status a cada 10 segundos. Os botões usam o ID real mesmo com descrições iguais. “Mostrar ocultos” não desbloqueia entradas iPXE/inativas. Alterar a ordem visual não modifica o `BootOrder`.
+Sinric controla um único PC escolhido no próprio painel. Mudar esse PC exige confirmação e limpa todos os slots antes de salvar; salve primeiro a troca de PC com os slots vazios, depois adicione os novos mapeamentos. Escolha novamente os sistemas no catálogo do novo PC. Remover o PC escolhido desativa a integração e não escolhe outro PC automaticamente. Sem catálogo, conecte um agent e solicite sincronização antes de mapear sistemas.
 
-## Formulários e credenciais
+## Verificação automatizada
 
-DHCP oculta os campos de IP estático sem apagar os valores. Credenciais vazias mantêm o valor existente; os indicadores `*_set` informam apenas que existe um segredo armazenado. Para Wi-Fi aberto, envie explicitamente `wifi_password:""` pela API.
+`npm ci` e `npx playwright install chromium firefox webkit` preparam os browsers. `npm run test:ui` executa interações reais em Chromium, Firefox e WebKit nas larguras 360, 390, 768 e 1280 px com uma API determinística interceptada. Os testes cobrem cadastro, seleção, resposta atrasada, salvamento por PC, aprovação explícita, cancelamento, expiração, falha NVS, isolamento de abas, Sinric, foco e ausência de overflow. Traces de falha ficam em `test-results/`, ignorado pelo Git. As fixtures nunca enviam comandos a hardware real.
 
-Ao ativar Sinric, App Key e App Secret novas precisam ter pelo menos 10 caracteres, ou já devem existir no ESP32. Device IDs devem conter exatamente 24 caracteres hexadecimais, não podem se repetir e precisam apontar para uma ação válida. A dashboard destaca o campo incorreto e não envia nem reinicia enquanto houver erro. Sinric ativo sem slots é permitido, mas exibe aviso porque não atenderá comandos.
+`node tests/test_dashboard_model.js`, os testes JS de validação/polling/Tailscale e `python tests/test_web_asset.py` verificam políticas e o documento gzip único e determinístico. Os módulos locais são incorporados na ordem `pc-model.js`, `pairing-ui.js`, `app.js`, sem dependências de CDN.
 
-O firmware repete a verificação antes de `SinricPro.begin()`. Configuração incompleta não inicia o SDK e registra uma vez `SINRIC_CONFIG_INCOMPLETE`.
-
-## Operação
-
-Rescan é pedido ao agent, não executado pela ESP32. Aguarde o evento WebSocket e reconecte para carregar um catálogo atualizado. Sem padrão válido, o script retorna ao firmware.
-
-Forçar WoL exige confirmação e não reinicia um PC em uso. “Reiniciar aqui” usa o canal do agent e confirmação separada. Ações destrutivas permanecem na seção Sistema.
-
+Validação de software em 2026-10-08: **288/288 interações Playwright passaram** nos três browsers e quatro larguras (1,8 min), incluindo criação de PC durante o pareamento, troca de credencial administrativa lembrada e reinício de paginação quando a geração muda. A revisão final também cobre bloqueio do salvamento até a última página do catálogo, atualização sequencial dos cards de todos os PCs, limpeza de login inválido, rejeição de subrotas desconhecidas e salvamento da troca Sinric antes do novo mapeamento. A navegação usa rolagem imediata para manter os controles estáveis durante interações rápidas. Os testes JS de modelo, validação, polling e Tailscale, estrutura Python e asset determinístico também passaram. A inspeção visual preservou a apresentação do painel. Esses resultados usam fixtures; presença e energia em PCs reais dependem da validação de hardware.

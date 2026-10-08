@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import gzip
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -29,5 +30,7 @@ header = (ROOT / "firmware/include/web_asset.h").read_text()
 assert header.startswith("#pragma once\n#include <pgmspace.h>\n")
 assert "\\n" not in header[:80]
 assert "const unsigned char webAsset[] PROGMEM" in header
+etag = hashlib.sha256(first).hexdigest()[:16]
+assert f'const char webAssetEtag[] = "{etag}";' in header
 
 print("PASS: deterministic multi-source dashboard asset")

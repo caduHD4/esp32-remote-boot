@@ -37,6 +37,7 @@ static const char *TAG = "microlink";
 
 /* X25519 from x25519.h */
 #include "x25519.h"
+#include "wireguardif.h"
 
 /* ============================================================================
  * Key Management (loaded once at init, read-only after)
@@ -580,6 +581,26 @@ void microlink_destroy(microlink_t *ml) {
 /* ============================================================================
  * State Queries
  * ========================================================================== */
+
+static unsigned tls_admission_owner;
+bool microlink_tls_try_acquire(void) {
+    unsigned expected = 0;
+    return __atomic_compare_exchange_n(&tls_admission_owner, &expected, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+void microlink_tls_release(void) { __atomic_store_n(&tls_admission_owner, 0, __ATOMIC_RELEASE); }
+
+void microlink_get_diagnostics(const microlink_t *ml, microlink_diagnostics_t *out) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!ml) return;
+#define ML_COPY_DIAG(field) out->field = __atomic_load_n(&ml->diagnostics.field, __ATOMIC_RELAXED)
+    ML_COPY_DIAG(control_online); ML_COPY_DIAG(derp_online); ML_COPY_DIAG(derp_server_info);
+    ML_COPY_DIAG(map_updates); ML_COPY_DIAG(reconnects); ML_COPY_DIAG(tls_deferred);
+    ML_COPY_DIAG(wg_encrypted_rx); ML_COPY_DIAG(wg_authenticated_rx);
+    ML_COPY_DIAG(last_authenticated_ms); ML_COPY_DIAG(peers);
+    wireguardif_diagnostics(&out->wg_encrypted_rx, &out->wg_authenticated_rx, &out->last_authenticated_ms);
+#undef ML_COPY_DIAG
+}
 
 microlink_state_t microlink_get_state(const microlink_t *ml) {
     return ml ? ml->state : ML_STATE_IDLE;

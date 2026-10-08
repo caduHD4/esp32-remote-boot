@@ -140,6 +140,15 @@ void microlink_destroy(microlink_t *ml);
 /**
  * @brief Get current connection state
  */
+typedef struct {
+    uint32_t control_online, derp_online, derp_server_info;
+    uint32_t map_updates, reconnects, tls_deferred, wg_encrypted_rx, wg_authenticated_rx;
+    uint32_t last_authenticated_ms, peers;
+} microlink_diagnostics_t;
+void microlink_get_diagnostics(const microlink_t *ml, microlink_diagnostics_t *out);
+bool microlink_tls_try_acquire(void);
+void microlink_tls_release(void);
+
 microlink_state_t microlink_get_state(const microlink_t *ml);
 
 /**

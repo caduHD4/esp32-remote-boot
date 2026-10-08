@@ -1,11 +1,12 @@
 import gzip
+import hashlib
 from pathlib import Path
 
 
 def build_web_document(root: Path) -> bytes:
-    template = (root / "firmware/web/index.html").read_text()
-    css = (root / "firmware/web/app.css").read_text()
-    js = (root / "firmware/web/app.js").read_text()
+    template = (root / "firmware/web/index.html").read_text(encoding="utf-8")
+    css = (root / "firmware/web/app.css").read_text(encoding="utf-8")
+    js = "\n".join((root / "firmware/web" / name).read_text(encoding="utf-8") for name in ("pc-model.js", "pairing-ui.js", "app.js"))
     if template.count("{{APP_CSS}}") != 1 or template.count("{{APP_JS}}") != 1:
         raise ValueError("web template placeholders must occur exactly once")
     return template.replace("{{APP_CSS}}", css).replace("{{APP_JS}}", js).encode()
@@ -13,12 +14,14 @@ def build_web_document(root: Path) -> bytes:
 
 def write_web_asset(root: Path) -> None:
     data = gzip.compress(build_web_document(root), mtime=0)
+    etag = hashlib.sha256(data).hexdigest()[:16]
     target = root / "firmware/include/web_asset.h"
     target.write_text(
         "#pragma once\n#include <pgmspace.h>\n"
         "const unsigned char webAsset[] PROGMEM = {"
         + ",".join(map(str, data))
         + "};\n"
+        + f'const char webAssetEtag[] = "{etag}";\n'
     )
 
 

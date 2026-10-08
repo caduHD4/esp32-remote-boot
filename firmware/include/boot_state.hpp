@@ -24,8 +24,9 @@ inline bool tokenEqual(const char* a,const char* b) {
     for(size_t i=0;i<m;++i) diff|=static_cast<unsigned char>((i<n?a[i]:0)^b[i]);
     return diff==0;
 }
-struct State {
-    Entry entries[MaxEntries]{}; size_t count=0;
+struct CompactEntry { uint16_t id;bool hidden;bool blocked; };
+template<typename EntryType> struct BootState {
+    EntryType entries[MaxEntries]{}; size_t count=0;
     int defaultTarget=None,lastSelected=None,pending=None,fallback=None,dispatchedTarget=None;
     uint32_t created=0,ttl=180000,heartbeatAt=0,heartbeatExpiry=45000,dispatchedAt=0;
     bool heartbeatSeen=false,dispatchSeen=false;
@@ -61,5 +62,7 @@ struct State {
         if(!valid(fallback)) fallback=None;
     }
 };
+using State=BootState<Entry>;
+using PcState=BootState<CompactEntry>;
 }
 

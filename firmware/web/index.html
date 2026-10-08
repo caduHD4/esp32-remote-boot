@@ -37,11 +37,13 @@
     <h1 id="login-title">Remote Boot</h1>
     <p class="muted">Controle seguro de inicialização na sua rede local.</p>
     <label class="field">
-      <span>Token administrativo</span>
-      <span class="input-wrap"><svg><use href="#icon-system"/></svg><input id="token" type="password" autocomplete="current-password" placeholder="Cole seu token"></span>
+      <span id="passwordLabel">Senha administrativa</span>
+      <span class="input-wrap"><svg><use href="#icon-system"/></svg><input id="token" type="password" autocomplete="current-password" placeholder="Digite sua senha"></span>
     </label>
+    <label id="repeatPasswordField" class="field" hidden><span>Repetir senha</span><input id="repeatPassword" type="password" autocomplete="new-password" placeholder="Repita sua senha"></label>
+    <label id="rememberLoginField" class="login-remember"><input id="rememberLogin" type="checkbox"><span>Permanecer conectado neste navegador</span></label>
     <button id="connect" class="button primary wide" type="button"><svg><use href="#icon-power"/></svg><span>Conectar</span></button>
-    <p class="login-help">No primeiro acesso, use a senha/token exibida no monitor serial.</p>
+    <p id="loginHelp" class="login-help">Entre com sua senha administrativa.</p>
     <p id="loginError" class="inline-alert" role="alert" hidden></p>
   </div>
 </section>
@@ -71,7 +73,7 @@
       <div class="top-status"><span id="topBadge" class="badge neutral">Carregando</span><button id="refreshStatus" class="icon-button" type="button" aria-label="Atualizar status"><svg><use href="#icon-refresh"/></svg></button></div>
     </header>
 
-    <p id="message" class="sr-only" role="status" aria-live="polite"></p>
+    <section class="panel pc-toolbar" aria-label="Computadores"><div class="button-row"><label class="field"><span>PC selecionado</span><select id="pcSelect"></select></label><button id="addPc" type="button" class="button primary">Adicionar PC</button><button id="pairAgent" type="button" class="button secondary">Parear agent</button></div><p id="pcEmpty" hidden>Nenhum PC cadastrado.</p><div id="pcCards" class="pc-cards"></div></section><p id="message" class="sr-only" role="status" aria-live="polite"></p>
 
     <section id="view-overview" class="view active" aria-labelledby="overview-title">
       <div class="section-heading"><div><h2 id="overview-title">Estado do ambiente</h2><p>Informações em tempo real do computador e do ESP32.</p></div></div>
@@ -100,7 +102,7 @@
     <form id="settings" novalidate>
       <section id="view-settings" class="view" aria-labelledby="settings-title" hidden>
         <div class="section-heading"><div><h2 id="settings-title">Configuração</h2><p id="setupInfo">Carregando configuração...</p></div><button type="submit" class="button primary save-button"><svg><use href="#icon-save"/></svg><span>Salvar alterações</span></button></div>
-        <div id="fields" class="settings-stack"></div>
+        <div class="panel"><h2>Ajustes do PC selecionado</h2><p id="pcSettingsName"></p><div id="pcFields" class="form-grid"></div><div class="button-row"><button id="savePc" type="button" class="button primary">Salvar ajustes do PC</button><button id="removePc" type="button" class="button danger-soft">Remover PC</button></div></div><h2>Configuração global da ESP32</h2><div id="fields" class="settings-stack"></div>
         <div class="panel">
           <div class="panel-head"><div><h2>Sistemas e exibição</h2><p>Oculte ou altere a prioridade visual sem modificar o BootOrder.</p></div></div>
           <div id="entries" class="entry-list"></div>
@@ -110,7 +112,7 @@
       <section id="view-sinric" class="view" aria-labelledby="sinric-title" hidden>
         <div class="section-heading"><div><h2 id="sinric-title">Sinric Pro</h2><p>Controle o boot e desligamento por Alexa ou Google Home.</p></div><button type="submit" class="button primary save-button"><svg><use href="#icon-save"/></svg><span>Salvar Sinric</span></button></div>
         <div class="panel sinric-main">
-          <label class="toggle-card"><span><strong>Ativar integração</strong><small>Conectar este ESP32 ao Sinric Pro</small></span><input type="checkbox" id="f_sinric_enabled" role="switch"></label>
+          <label class="field"><span>PC controlado pelo Sinric</span><select id="sinricPc"></select></label><p id="sinricCatalogInfo" class="muted"></p><label class="toggle-card"><span><strong>Ativar integração</strong><small>Conectar este ESP32 ao Sinric Pro</small></span><input type="checkbox" id="f_sinric_enabled" role="switch"></label>
           <div id="sinricCredentials" class="form-grid two">
             <label class="field" id="wrap_sinric_app_key"><span>App Key</span><input id="f_sinric_app_key" type="password" autocomplete="new-password" placeholder="Informe a App Key"><small id="hint_sinric_app_key" class="field-hint"></small><small class="field-error" data-error-for="sinric_app_key"></small></label>
             <label class="field" id="wrap_sinric_app_secret"><span>App Secret</span><input id="f_sinric_app_secret" type="password" autocomplete="new-password" placeholder="Informe o App Secret"><small id="hint_sinric_app_secret" class="field-hint"></small><small class="field-error" data-error-for="sinric_app_secret"></small></label>
@@ -130,7 +132,7 @@
         <div class="panel-head"><div><h2>Logs do dispositivo</h2><p>Os últimos eventos são mantidos apenas na memória.</p></div><button id="readLogs" class="button secondary compact" type="button"><svg><use href="#icon-terminal"/></svg><span>Ler logs</span></button></div>
         <pre id="logs" class="log-view">Clique em “Ler logs” para carregar.</pre>
       </div>
-      <div class="panel danger-zone">
+      <div class="panel"><h2>Agents vinculados</h2><p>A conexão só é confirmada após o hello do agent.</p><div id="agentList"></div></div><div class="panel danger-zone">
         <div><h2>Zona de manutenção</h2><p>Estas ações interrompem o funcionamento temporariamente.</p></div>
         <div class="button-row"><button id="restart" class="button secondary" type="button"><svg><use href="#icon-refresh"/></svg><span>Reiniciar ESP32</span></button><button id="reset" class="button danger" type="button"><svg><use href="#icon-trash"/></svg><span>Restaurar fábrica</span></button></div>
       </div>
@@ -138,7 +140,8 @@
   </main>
 </div>
 
-<div id="toastStatus" class="toast-stack" role="status" aria-live="polite"></div>
+<dialog id="pcDialog" aria-labelledby="pcDialogTitle"><form id="newPcForm"><h2 id="pcDialogTitle">Adicionar PC</h2><p>Identifique a interface Ethernet usada no Wake-on-LAN.</p><label class="field"><span>Nome do PC</span><input id="newPcName" required maxlength="64"></label><label class="field"><span>MAC Ethernet</span><input id="newPcMac" required placeholder="AA:BB:CC:DD:EE:FF" pattern="(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}"></label><p id="pcError" role="alert"></p><div class="button-row"><button class="button primary" type="submit">Criar PC</button><button id="cancelPc" class="button secondary" type="button">Cancelar</button></div></form></dialog>
+<dialog id="pairingDialog" aria-labelledby="pairingTitle"><h2 id="pairingTitle">Parear agent</h2><p id="pairWindowStatus" role="status">Abrindo janela…</p><p>Digite o código curto do instalador. Confira os detalhes detectados no computador.</p><label class="field"><span>Código do instalador</span><input id="pairCode" maxlength="9" autocomplete="off" placeholder="ABCD-EFGH"></label><button id="pairLookup" class="button secondary" type="button">Consultar código</button><div id="pairReview" hidden><p id="pairDetails"></p><p id="pairTimer" role="timer"></p><label class="field"><span>PC de destino</span><select id="pairPc"></select></label><button id="pairCreatePc" class="button ghost" type="button">Criar novo PC</button><label class="field"><span>Nome desta instalação</span><input id="pairName" maxlength="64" placeholder="Ex.: Windows principal"></label><label class="check-field"><input id="pairConfirmed" type="checkbox">Conferi o computador e autorizo este vínculo</label></div><p id="pairError" role="alert" hidden></p><div class="button-row"><button id="pairApprove" class="button primary" type="button" disabled>Confirmar vínculo</button><button id="pairCancel" class="button secondary" type="button">Cancelar pareamento</button></div></dialog><div id="toastStatus" class="toast-stack" role="status" aria-live="polite"></div>
 <div id="toastAlert" class="toast-stack alert-stack" role="alert" aria-live="assertive"></div>
 <script>{{APP_JS}}</script>
 </body>

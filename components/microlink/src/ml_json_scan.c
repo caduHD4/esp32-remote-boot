@@ -189,3 +189,9 @@ bool ml_json_array_next(ml_json_slice_t array, size_t *cursor,
     *cursor = end;
     return true;
 }
+
+bool ml_json_object_valid(ml_json_slice_t object) {
+    size_t start = skip_space(object, 0), end = 0;
+    return start < object.len && object.ptr[start] == '{' &&
+        skip_value(object, start, &end) && skip_space(object, end) == object.len;
+}

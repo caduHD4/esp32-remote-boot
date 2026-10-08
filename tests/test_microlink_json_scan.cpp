@@ -1,4 +1,5 @@
 #include <cassert>
+#include <string>
 #include <cstddef>
 #include <cstring>
 
@@ -64,4 +65,20 @@ int main() {
     const char invalid_primitive[] = "{\"Node\":not-json}";
     ml_json_slice_t invalid_primitive_root{invalid_primitive, sizeof(invalid_primitive) - 1};
     assert(!ml_json_object_get(invalid_primitive_root, "Node", &node));
+    assert(ml_json_object_valid(root));
+    assert(!ml_json_object_valid(malformed_root));
+    assert(!ml_json_object_valid(invalid_primitive_root));
+    const char keepalive[] = "{}";
+    assert(ml_json_object_valid({keepalive, 2}));
+    assert(!ml_json_object_valid({"{}trailing", 10}));
+    // Long-poll can contain 22KB of ignored DERP metadata and optional deltas.
+    std::string large = "{\"DERPMap\":{\"Ignored\":\"" + std::string(22942, 'x') +
+        "\"},\"PeersChanged\":[{\"Name\":\"one\"}],\"PeersRemoved\":[\"nodekey:abcd\"]}";
+    ml_json_slice_t delta{large.data(),large.size()}, changed{};
+    assert(ml_json_object_valid(delta));
+    assert(ml_json_object_get(delta, "PeersChanged", &changed));
+    cursor=0;
+    assert(ml_json_array_next(changed,&cursor,&peer));
+    assert(equals(peer,"{\"Name\":\"one\"}"));
+    assert(!ml_json_array_next(changed,&cursor,&peer));
 }

@@ -1,8 +1,9 @@
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot
-Get-ChildItem $root -Filter *.ps1 -Recurse|ForEach-Object {
+$tracked=git -C $root ls-files '*.ps1'
+$tracked|ForEach-Object {
     $tokens=$null;$errors=$null
-    [Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)|Out-Null
+    [Management.Automation.Language.Parser]::ParseFile((Join-Path $root $_),[ref]$tokens,[ref]$errors)|Out-Null
     if($errors.Count){throw ($errors|Out-String)}
 }
 Add-Type -Path (Join-Path $root 'agent/windows/Firmware.cs')

@@ -27,3 +27,7 @@ firmware/include/web_asset.h
 # Native agent build outputs
 **/bin/
 **/obj/
+
+node_modules/
+test-results/
+playwright-report/

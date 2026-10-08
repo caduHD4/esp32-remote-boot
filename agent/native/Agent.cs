@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -11,21 +12,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace RemoteBoot {
-public sealed class Config {
-    public Uri Url;public string Token;public bool AllowShutdown,AllowReboot;public int WsPort=81;
-    public static Config Read(string path) {
-        if(new FileInfo(path).Length>16384)throw new Exception("Configuration too large");
-        using var doc=JsonDocument.Parse(File.ReadAllText(path));var d=doc.RootElement;
-        var c=new Config{Url=new Uri(d.GetProperty("url").GetString()),Token=d.GetProperty("token").GetString(),
-            AllowShutdown=Json.Bool(d,"allow_shutdown"),AllowReboot=Json.Bool(d,"allow_reboot")};
-        if(d.TryGetProperty("ws_port",out var port))c.WsPort=port.GetInt32();
-        if(c.Url.Scheme!="http"||!IPAddress.TryParse(c.Url.Host,out var ip)||ip.AddressFamily!=System.Net.Sockets.AddressFamily.InterNetwork||
-           c.Url.AbsolutePath!="/"||c.Url.Query!=""||c.Url.UserInfo!=""||c.WsPort<1||c.WsPort>65535||
-           c.Token==null||c.Token.Length<24||c.Token.Length>128)throw new Exception("Invalid configuration");
-        foreach(char ch in c.Token)if(!char.IsAsciiLetterOrDigit(ch)&&ch!='_'&&ch!='-')throw new Exception("Invalid token format");
-        return c;
-    }
-}
 public static class Json {
     public static string Text(JsonElement d,string key)=>d.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():"";
     public static bool Bool(JsonElement d,string key)=>d.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.True;
@@ -36,16 +22,16 @@ public static class Json {
 }
 public sealed class CommandGate {
     readonly IHost host;readonly Config config;readonly string ackPath,session;
+    readonly HashSet<string> consumed=new HashSet<string>(StringComparer.Ordinal);
     string lastId,pendingId="",action="",target="";long received;
     public CommandGate(IHost host,Config config,string ackPath,string session) {
         this.host=host;this.config=config;this.ackPath=ackPath;this.session=session;
-        lastId=File.Exists(ackPath)?File.ReadAllText(ackPath):"";
+        lastId=File.Exists(ackPath)?File.ReadAllText(ackPath):"";if(lastId!="")consumed.Add(lastId);
     }
     public bool Pending=>pendingId.Length>0;
     public string Accept(JsonElement d) {
         string id=Json.Text(d,"id"),next=Json.Text(d,"action"),boot=Json.Text(d,"boot_id");
-        if(Pending||id.Length!=32||id==lastId||Json.Text(d,"session_id")!=session)return "";
-        foreach(char ch in id)if(!Uri.IsHexDigit(ch))return "";
+        if(Pending||!AgentIdentity.ValidHex(id,32)||consumed.Contains(id)||!AgentIdentity.Matches(d,config,session))return "";
         if(next=="shutdown") { if(!config.AllowShutdown)return ""; }
         else if(next=="reboot") { if(!config.AllowReboot)return "";host.ValidateTarget(boot); }
         else return "";
@@ -53,10 +39,10 @@ public sealed class CommandGate {
         using(var file=new FileStream(ackPath,FileMode.Create,FileAccess.Write,FileShare.None)) {
             file.Write(Encoding.ASCII.GetBytes(id));file.Flush(true);
         }
-        lastId=id;pendingId=id;action=next;target=boot;received=Stopwatch.GetTimestamp();return id;
+        lastId=id;consumed.Add(id);pendingId=id;action=next;target=boot;received=Stopwatch.GetTimestamp();return id;
     }
     public string Commit(JsonElement d) {
-        if(!Pending||Json.Text(d,"id")!=pendingId||Json.Text(d,"session_id")!=session)return "";
+        if(!Pending||Json.Text(d,"id")!=pendingId||!AgentIdentity.Matches(d,config,session))return "";
         string id=pendingId;pendingId="";
         if(!Json.Bool(d,"accepted")||Stopwatch.GetElapsedTime(received).TotalSeconds>=15)return "";
         host.Execute(action,target);return id;
@@ -66,7 +52,7 @@ public sealed class Agent {
     readonly Config config;readonly IHost host;readonly string ackPath;
     public Agent(Config config,IHost host,string ackPath){this.config=config;this.host=host;this.ackPath=ackPath;}
     public static async Task<JsonDocument> Receive(WebSocket socket,CancellationToken token) {
-        var bytes=new byte[12288];int count=0;
+        var bytes=new byte[12000];int count=0;
         while(true) {
             if(count==bytes.Length)throw new Exception("Frame exceeds protocol limit");
             var r=await socket.ReceiveAsync(new ArraySegment<byte>(bytes,count,bytes.Length-count),token);
@@ -78,19 +64,22 @@ public sealed class Agent {
         return doc;
     }
     static Task Send(WebSocket socket,byte[] data,CancellationToken token)=>socket.SendAsync(new ArraySegment<byte>(data),WebSocketMessageType.Text,true,token);
-    async Task Sync(CancellationToken token) {
+    async Task Sync(string session,CancellationToken token) {
         var catalog=host.Catalog();
         var data=Json.Build(w=>{w.WriteStartArray("systems");foreach(var e in catalog){w.WriteStartObject();w.WriteString("id",e.id);w.WriteString("name",e.name);w.WriteBoolean("hidden",e.hidden);w.WriteBoolean("blocked",e.blocked);w.WriteEndObject();}w.WriteEndArray();});
         if(data.Length>12000)throw new Exception("Catalog too large");
         using var handler=new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false};
         using var http=new HttpClient(handler){Timeout=TimeSpan.FromSeconds(8)};
-        using var request=new HttpRequestMessage(HttpMethod.Post,new Uri(config.Url,"/api/v1/systems/sync"));
+        using var request=new HttpRequestMessage(HttpMethod.Post,new Uri(config.Url,"/api/v2/agent/systems/sync"));
         request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",config.Token);
+        request.Headers.Add("X-Agent-Session",session);
         request.Content=new ByteArrayContent(data);request.Content.Headers.ContentType=new MediaTypeHeaderValue("application/json");
         using var response=await http.SendAsync(request,token);response.EnsureSuccessStatusCode();
     }
-    public async Task ConnectOnce(CancellationToken token) {
+    public async Task ConnectOnce(CancellationToken token,bool checkOnly=false) {
         using var socket=new ClientWebSocket();
+        using var wsHandler=new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false};
+        using var wsHttp=new HttpMessageInvoker(wsHandler,false);
         socket.Options.Proxy=null;socket.Options.AddSubProtocol("arduino");
         socket.Options.KeepAliveInterval=TimeSpan.FromSeconds(60);
 #if NET9_0_OR_GREATER
@@ -98,34 +87,34 @@ public sealed class Agent {
 #endif
         using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)) {
             timeout.CancelAfter(TimeSpan.FromSeconds(10));
-            await socket.ConnectAsync(new UriBuilder("ws",config.Url.Host,config.WsPort,"/agent").Uri,timeout.Token);
+            await socket.ConnectAsync(new UriBuilder("ws",config.Url.Host,config.WsPort,"/agent/v2").Uri,wsHttp,timeout.Token);
         }
         string session=Guid.NewGuid().ToString("N");var gate=new CommandGate(host,config,ackPath,session);
         using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(token)) {
             timeout.CancelAfter(TimeSpan.FromSeconds(10));
-            await Send(socket,Json.Build(w=>{w.WriteString("type","hello");w.WriteString("token",config.Token);w.WriteString("session_id",session);
+            await Send(socket,Json.Build(w=>{w.WriteString("type","hello");w.WriteNumber("protocol",2);w.WriteString("agent_id",config.AgentId);w.WriteString("token",config.Token);w.WriteString("session_id",session);
                 w.WriteString("hostname",Environment.MachineName);w.WriteString("os",OperatingSystem.IsWindows()?"Windows":"Linux");w.WriteString("boot_id",host.CurrentBoot());
-                w.WriteBoolean("shutdown_enabled",config.AllowShutdown);w.WriteBoolean("reboot_enabled",config.AllowReboot);}),timeout.Token);
+                w.WriteStartObject("permissions");w.WriteBoolean("shutdown",config.AllowShutdown);w.WriteBoolean("reboot",config.AllowReboot);w.WriteEndObject();}),timeout.Token);
             using var ready=await Receive(socket,timeout.Token);
-            if(Json.Text(ready.RootElement,"type")!="ready"||Json.Text(ready.RootElement,"session_id")!=session)throw new Exception("Authentication rejected");
+            if(Json.Text(ready.RootElement,"type")!="ready"||!AgentIdentity.Matches(ready.RootElement,config,session))throw new Exception("Authentication rejected");
         }
-        await Sync(token);Console.WriteLine("Agent connected via WebSocket");
+        await Sync(session,token);if(checkOnly)return;Console.WriteLine("Agent connected via WebSocket");
         while(!token.IsCancellationRequested) {
             using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token);
             if(gate.Pending)timeout.CancelAfter(TimeSpan.FromSeconds(15));
             using var doc=await Receive(socket,timeout.Token);var d=doc.RootElement;
             string type=Json.Text(d,"type");
-            if(type=="discover") { if(!gate.Pending)await Sync(token); }
+            if(type=="discover") { if(!gate.Pending&&AgentIdentity.Matches(d,config,session))await Sync(session,token); }
             else if(type=="command") {
                 string id=gate.Accept(d);
-                if(id!="")await Send(socket,Json.Build(w=>{w.WriteString("type","ack");w.WriteString("id",id);w.WriteString("session_id",session);}),token);
+                if(id!="")await Send(socket,Json.Build(w=>{w.WriteString("type","ack");w.WriteString("id",id);AgentIdentity.Write(w,config,session);}),token);
             } else if(type=="ack") {
                 try {
                     string id=gate.Commit(d);
-                    if(id!="")await Send(socket,Json.Build(w=>{w.WriteString("type","result");w.WriteString("id",id);w.WriteBoolean("requested",true);}),token);
+                    if(id!="")await Send(socket,Json.Build(w=>{w.WriteString("type","result");w.WriteString("id",id);w.WriteBoolean("requested",true);AgentIdentity.Write(w,config,session);}),token);
                 } catch(Exception ex) {
                     Console.Error.WriteLine("Power operation refused: "+ex.GetType().Name);
-                    await Send(socket,Json.Build(w=>{w.WriteString("type","result");w.WriteString("id",Json.Text(d,"id"));w.WriteBoolean("requested",false);}),token);
+                    await Send(socket,Json.Build(w=>{w.WriteString("type","result");w.WriteString("id",Json.Text(d,"id"));w.WriteBoolean("requested",false);AgentIdentity.Write(w,config,session);}),token);
                 }
             }
         }
@@ -146,13 +135,38 @@ public static class Program {
     public static async Task<int> Main(string[] args) {
         try {
             if(args.Length==1&&args[0]=="--self-test")return SelfTest.Run();
-            if(args.Length!=2||args[0]!="--config") { Console.Error.WriteLine("Usage: remote-boot-agent --config PATH | --self-test");return 2; }
-            string path=Path.GetFullPath(args[1]);var config=Config.Read(path);var directory=Path.GetDirectoryName(path);
+            bool pair=false,check=false,allowReboot=false,allowShutdown=false;string configPath="",url="";
+            for(int i=0;i<args.Length;i++) {
+                switch(args[i]) {
+                    case "--pair":pair=true;break;
+                    case "--check":check=true;break;
+                    case "--allow-reboot":allowReboot=true;break;
+                    case "--allow-shutdown":allowShutdown=true;break;
+                    case "--config":if(++i==args.Length)throw new Exception("Missing configuration path");configPath=args[i];break;
+                    case "--url":if(++i==args.Length)throw new Exception("Missing URL");url=args[i];break;
+                    default:throw new Exception("Unknown option");
+                }
+            }
+            if(configPath==""||pair&&url==""||pair&&check||!pair&&url!="") {
+                Console.Error.WriteLine("Usage: remote-boot-agent --pair --url http://IP --config PATH [--allow-reboot] [--allow-shutdown] | --config PATH [--check] | --self-test");return 2;
+            }
+            string path=Path.GetFullPath(configPath);var directory=Path.GetDirectoryName(path);
+            if(!Directory.Exists(directory))throw new Exception("Create a protected configuration directory first");
             using var instance=new FileStream(Path.Combine(directory,"agent.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
             using var stop=new CancellationTokenSource();Console.CancelKeyPress+=(s,e)=>{e.Cancel=true;stop.Cancel();};
-            var host=new NativeHost();await new Agent(config,host,Path.Combine(directory,"ack.txt")).Run(stop.Token);return 0;
-        } catch(OperationCanceledException){return 0;}
-        catch(Exception ex){Console.Error.WriteLine("Agent stopped: "+ex.GetType().Name);return 1;}
+            if(pair) {
+                using var pairing=new PairingClient();
+                await pairing.Pair(new Uri(url),path,allowReboot,allowShutdown,async (paired,token)=>{
+                    var verificationHost=new NativeHost();
+                    await new Agent(paired,verificationHost,Path.Combine(directory,"ack.txt")).ConnectOnce(token,true);
+                },stop.Token);return 0;
+            }
+            var config=Config.Read(path);
+            var host=new NativeHost();var agent=new Agent(config,host,Path.Combine(directory,"ack.txt"));
+            if(check){using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(20));await agent.ConnectOnce(timeout.Token,true);Console.WriteLine("Agent identity verified");}
+            else await agent.Run(stop.Token);return 0;
+        } catch(OperationCanceledException){Console.Error.WriteLine("Agent canceled or timed out");return 1;}
+        catch(Exception ex){Console.Error.WriteLine(args.Length==1&&args[0]=="--self-test"?ex.ToString():"Agent stopped: "+ex.GetType().Name);return 1;}
     }
 }
 }

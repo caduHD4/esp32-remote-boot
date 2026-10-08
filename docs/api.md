@@ -1,49 +1,78 @@
-# API v1
+# API v2 e protocolo do agent
 
-JSON; header `Authorization: Bearer TOKEN`. Corpo máximo aceito pelo handler: 12.000 bytes. O WebServer pode alocar o corpo antes dessa checagem: não é proteção integral contra DoS. Admin é aceito em todas as rotas; token agent só nas rotas marcadas.
+O firmware aceita somente a API v2 e configuração schema 3. Clientes v1 recebem `410 PROTOCOL_VERSION_UNSUPPORTED`; não há heartbeat HTTP legado nem token global de agent. JSON é usado em todas as rotas. O handler limita corpos a 12.000 bytes, mas o `WebServer` pode alocar o corpo antes dessa checagem.
 
-| Método / rota | Permissão | Corpo/resultado |
+Rotas administrativas usam `Authorization: Bearer <admin_token>`, exceto cadastro inicial e boot público. Catálogos e comandos são escopados a um `pc_id`. O token de um agent autentica somente o vínculo salvo e a sessão correspondente; o servidor deriva o PC desse vínculo.
+
+## Cadastro e configuração
+
+| Método e rota | Acesso | Comportamento |
 |---|---|---|
-| GET `/api/v1/status` | admin | online, os, IP, RSSI, heap, uptime, Sinric, Tailscale, padrão/pending/última escolha |
-| GET `/api/v1/config` | admin | configuração sem valores secretos |
-| PUT `/api/v1/config` | admin | patch de campos permitidos; valida, salva e reinicia ESP32 |
-| GET `/api/v1/systems` | admin/agent | `{systems:[{id,name,hidden,blocked}]}` |
-| POST `/api/v1/systems/sync` | admin/agent | mesmo objeto de catálogo; máximo 24, IDs únicos |
-| POST `/api/v1/boot` | admin | `{boot_id:"0001"}`; 202 fila WoL, 409 online |
-| POST `/api/v1/discovery/request` | admin | `{}`; envia evento discover ao agent conectado; mantém geração para legado |
-| POST `/api/v1/heartbeat` | admin/agent | hostname, os, boot_id opcional, uptime, ack opcional; devolve geração e eventual comando |
-| GET `/api/v1/logs` | admin | últimas 32 mensagens RAM |
-| POST `/api/v1/reboot` | admin | `{boot_id:"0001",confirm:"REBOOT"}`; exige heartbeat online |
-| POST `/api/v1/system/reboot` | admin | `{}`; reinicia ESP32 |
-| POST `/api/v1/system/reset` | admin | `{confirm:"FACTORY_RESET"}` |
-| GET `/boot.ipxe` | público | script de boot, sem secrets |
+| GET `/api/v2/setup` | Público | Retorna `required` e `config_locked`. |
+| POST `/api/v2/setup` | Público, somente no primeiro cadastro | Aceita `{password,repeat_password}`; salva senha admin e listas vazias, depois reinicia. |
+| GET `/api/v2/bootstrap` | Admin | Configuração global sanitizada, até quatro PCs sem catálogos, até oito vínculos sem tokens e estado resumido. Segredos são substituídos por flags `*_set`. |
+| GET `/api/v2/status` | Admin | Estado global, Wi-Fi, Tailscale, Sinric, limites e heap. |
+| PUT `/api/v2/config` | Admin | Patch global: `admin_token`, `tailscale_auth_key`, `tailscale_device_name`, `dhcp`, `ip`, `subnet`, `gateway`, `dns`. Salva e reinicia. |
+| POST `/api/v2/system/reboot` | Admin | Reinicia a ESP32. |
+| POST `/api/v2/system/reset` | Admin | Exige `{confirm:"FACTORY_RESET"}`, apaga a configuração NVS e reinicia para novo cadastro. |
 
-`force:true` no boot exige `confirm:"FORCE_BOOT"`; não reinicia o PC. Reboot do PC fica disponível ao agent por 30 s. O agent valida Boot####, grava BootNext e persiste o ID de comando antes do ack e reboot; falha no ack cancela BootNext. Um comando consumido não é repetido automaticamente.
+A senha administrativa tem 8–128 bytes e não pode conter caracteres ASCII de controle. Configuração salva contém `config_version: 3`. A API não fornece uma rota que devolva segredos: bootstrap só informa se estão definidos.
 
-Pending TTL: 30–3.600 s, padrão 180. Agent nativo: WebSocket/keepalive 60 s, expiração de presença 90 s; HTTP legado: heartbeat 12 s, offline 45 s. WoL: porta 1–65535, 1–10 repetições, intervalo 20–1000 ms e cooldown 3 s. Offline significa ausência de heartbeat, não confirmação elétrica de desligamento.
+## PCs, catálogo e comandos
 
-Schema/config: veja `config.example.json` para patch sanitizado; ele não contém credenciais utilizáveis. `default_target`, `fallback_boot_id` aceitam string vazia para nenhum. `physical_boot_behavior`: `default_target`, `last_selected`, `exit_to_firmware`. Sinric slots: `[{device_id:"ID_REAL",boot_id:"0001"}]` ou `boot_id:"default"`. Ativar Sinric sem App Key/App Secret válidos retorna `SINRIC_CREDENTIALS_REQUIRED`.
+| Método e rota | Acesso | Comportamento |
+|---|---|---|
+| GET `/api/v2/pcs` | Admin | Lista PCs sem o array de sistemas. |
+| POST `/api/v2/pcs` | Admin | Cria PC. Aceita `name`, `mac`, WoL, TTL e política de boot; o firmware gera `pc_id`. MAC Ethernet deve ser válido e único entre PCs. |
+| GET `/api/v2/pcs/{pc_id}` | Admin | Configuração do PC, `systems_count` e estado; sem catálogo completo. |
+| PUT `/api/v2/pcs/{pc_id}` | Admin | Atualiza nome, MAC, WoL, TTL, política, padrão ou fallback. |
+| DELETE `/api/v2/pcs/{pc_id}` | Admin | Exige `{confirm:"DELETE_PC"}`; remove vínculos e estado do PC. Remover o PC Sinric selecionado também desativa Sinric e limpa seus slots. |
+| GET `/api/v2/pcs/{pc_id}/status` | Admin | Estado daquele PC e agent. |
+| GET `/api/v2/pcs/{pc_id}/systems?offset=0&limit=8` | Admin | Página do catálogo, máximo oito entradas. Resposta inclui `offset`, `total` e `generation`; se a geração mudar durante a leitura, repita a paginação. |
+| PUT `/api/v2/pcs/{pc_id}/systems` | Admin | Atualiza visibilidade para o catálogo atual daquele PC. |
+| POST `/api/v2/pcs/{pc_id}/discovery` | Admin | Solicita descoberta ao agent conectado; `/discovery/request` também é aceito. |
+| POST `/api/v2/pcs/{pc_id}/boot` | Admin | `{boot_id:"0001"}` agenda WoL e boot. `force:true` exige `confirm:"FORCE_BOOT"`. |
+| POST `/api/v2/pcs/{pc_id}/reboot` | Admin | `{boot_id:"0001",confirm:"REBOOT"}`; exige agent online com reboot habilitado. |
+| POST `/api/v2/pcs/{pc_id}/shutdown` | Admin | `{confirm:"SHUTDOWN"}`; exige agent online com shutdown habilitado. |
+| GET `/api/v2/agents` | Admin | Lista PC, instalação, OS, presença e permissões reportadas; não retorna tokens. |
+| DELETE `/api/v2/agents/{agent_id}` | Admin | Revoga vínculo e desconecta sua sessão. |
+| GET `/api/v2/logs` | Admin | Últimos 32 eventos em RAM, sem tokens ou payloads. |
 
-Erros são `{error:"CODIGO"}`. 400 entrada inválida, 401/403 autenticação, 409 conflito, 413 corpo grande, 429 cooldown, 500 NVS, 503 indisponível. A API não garante que WoL acordou a máquina: 202 confirma apenas fila aceita.
+Limites: quatro PCs, oito instalações de agent no total e 24 entradas UEFI por PC. Dois agents podem pertencer ao mesmo PC, por exemplo Windows e Linux, mas somente uma sessão por PC fica ativa. Nomes e hostnames não são identidade. `pc_id` e `agent_id` têm 32 dígitos hexadecimais minúsculos. IDs Boot#### são strings de quatro dígitos hexadecimais.
 
-## Estado MicroLink/Tailscale
+Cada PC tem `default_target`, `fallback_boot_id`, `last_selected_target`, `pending_ttl_s` (30–3.600, padrão 180) e `physical_boot_behavior` (`default_target`, `last_selected`, `exit_to_firmware`). Catálogo é sincronizado pelo agent nativo autenticado, limitado a 24 entradas. O firmware preserva nome/visibilidade editados e remove referências a entradas que deixaram de existir.
 
-No firmware padrão, `tailscale` retorna `built:false` e `state:"disabled"`. No ambiente experimental, o objeto contém `built`, `configured`, `connected`, `state`, `ip`, `peers`, `heap_free`, `heap_minimum` e `largest_block`. Estados possíveis incluem `not_configured`, `config_locked`, `setup_mode`, `wifi_offline`, `starting`, `connecting`, `registering`, `connected`, `reconnecting` e `error`.
+`GET /boot/{pc_id}.ipxe` é público na LAN e entrega somente o estado de boot daquele PC. Não existe destino implícito. Ausência de PC retorna 404 sem consumir pending de outro PC.
 
-A API nunca retorna a auth key. Ela continua protegida pelo Bearer token administrativo tanto na LAN quanto pelo IP Tailscale. Falha do túnel não muda a disponibilidade da API na LAN.
+## Pareamento
 
-## Shutdown
+| Método e rota | Acesso | Comportamento |
+|---|---|---|
+| POST `/api/v2/pairing/window` | Admin | Abre janela de cinco minutos. |
+| DELETE `/api/v2/pairing/window` | Admin | Fecha a janela e cancela solicitações ainda não aprovadas. |
+| POST `/api/v2/pairing/start` | Agent sem vínculo, durante a janela | Recebe `{hostname,os}` e retorna `pairing_id`, `device_secret`, código de oito caracteres, `expires_in:300` e `poll_interval:2`. |
+| POST `/api/v2/pairing/lookup` | Admin | `{code}` retorna hostname/OS não confiáveis e ID da solicitação correspondente. |
+| POST `/api/v2/pairing/{pairing_id}/approve` | Admin | `{pc_id,installation_name}` persiste novo agent e vínculo ao PC antes de permitir entrega. |
+| DELETE `/api/v2/pairing/{pairing_id}` | Admin | Cancela a solicitação. |
+| POST `/api/v2/pairing/{pairing_id}/poll` | Agent solicitante, Bearer `device_secret` | Retorna `pending`, `approved`, `canceled`, `expired` ou `confirmed`; após aprovação entrega `agent_id`, `pc_id`, `token` e `protocol:2` somente ao dono da solicitação. |
+| POST `/api/v2/pairing/{pairing_id}/confirm` | Agent solicitante, Bearer `device_secret` | Confirma a credencial depois de salvá-la e validar hello. Repetir confirmação é idempotente por cinco minutos. |
 
-`POST /api/v1/shutdown`, token administrativo, body `{"confirm":"SHUTDOWN"}`. Retorna 202 com `queued: true` quando o agent está online, com sessão e shutdown habilitado. 400 exige confirmação, 403 indica permissão desabilitada, 409 indica agent offline ou comando pendente, 503 indica firmware indisponível/setup bloqueado.
+Há no máximo três solicitações simultâneas, seis inícios por minuto e cinco consultas administrativas por minuto; exceder consultas bloqueia novas tentativas por 60 segundos. A credencial permanente do agent é de 256 bits. O segredo temporário e a credencial nunca são enviados em URL. O fluxo usa HTTP na rede configurada, sem TLS.
 
-O heartbeat HTTP legado envia `session_id` (nonce novo por inicialização do processo) e `shutdown_enabled`. A resposta pode trazer `command: {id, action:"shutdown", boot_id:"", session_id}`. O agent persiste o ID, envia um novo heartbeat com `ack` e executa somente se a resposta tiver `ack_accepted: true`. A fila é única para reboot/shutdown, reside em RAM e expira em 30 segundos; sessão diferente ou permissão revogada cancelam shutdown. Não enviar comandos arbitrários de shell. Status inclui `shutdown_enabled` efetivo.
+## Agent nativo
 
-Slots Sinric também aceitam `boot_id:"shutdown"`; ON solicita shutdown. OFF permanece sem ação para todos os slots. O ACK significa consumo autorizado do comando, não conclusão do shutdown físico.
+O WebSocket é `ws://ESP32:81/agent/v2`. Hello usa `protocol:2`, `agent_id`, token, `session_id`, hostname, OS, Boot ID e permissões `{reboot,shutdown}`. O servidor resolve o PC pelo vínculo do agent; `pc_id` não concede acesso. A resposta `ready` e os frames subsequentes carregam `pc_id`, `agent_id` e `session_id`.
 
-## Canal WebSocket do agent nativo
+Comandos, ACK e resultado também incluem `id`. A sessão precisa coincidir em cada mensagem. A fila reside em RAM por PC e expira em 30 segundos; o agent precisa ACK em até 15 segundos. Keepalive é 60 segundos e presença expira em 90 segundos. O agent grava o ID do comando antes do ACK e só executa após confirmação positiva; não executa shell arbitrário.
 
-`ws://ESP32:81/agent`, subprotocolo `arduino`. Autenticação inicial em até 5 s: `{type:"hello",token:"AGENT_TOKEN",session_id:"32_HEX",hostname,os,boot_id,reboot_enabled,shutdown_enabled}`. A resposta `ready` devolve `session_id`. Somente o agent token é aceito neste canal. Um único agent autenticado; novos concorrentes são rejeitados.
+O agent sincroniza seu catálogo em `POST /api/v2/agent/systems/sync`, com Bearer token individual e `X-Agent-Session`. O servidor deriva o PC do token e exige sessão WebSocket ativa. Mensagens de aplicação têm limite de 12.000 bytes.
 
-ESP32 envia `{type:"command",id,action:"reboot"|"shutdown",boot_id,session_id}`. Agent responde `{type:"ack",id,session_id}`; ESP32 devolve `{type:"ack",id,session_id,accepted:true|false}`. Somente ACK positivo autoriza a operação. Agent informa `{type:"result",id,requested:true|false}`; isso indica aceitação local pelo OS, não término físico. Descoberta: ESP32 envia `{type:"discover"}`, agent envia catálogo por HTTP `/systems/sync`. Catálogo também é enviado uma vez ao conectar. Não há varredura periódica.
+## Sinric
 
-A fila RAM usa a mesma expiração de 30 s. Agent limita espera/validade do ACK a 15 s; reconexão gera nova sessão. Reboot nativo só escreve BootNext depois do ACK, restaurando o valor anterior se o OS recusar reboot. Mensagens de aplicação limitadas a 12.000 bytes e sem fragmentação no firmware; o SDK pode alocar até 15 KiB antes do handler. Keepalive não transporta comandos. Status inclui `agent_transport` (`websocket`/`http-legacy`). Heartbeat HTTP retorna 409 enquanto o WebSocket está autenticado.
+Sinric pode ser vinculado a somente um `sinric_pc_id` por vez, com até oito slots globais. Cada slot usa um Device ID e `boot_id` pertencente a esse PC, ou `default`/`shutdown`. Alterar o PC selecionado limpa os slots; remover esse PC desativa a integração. Ver [Sinric](sinric.md).
+
+## Erros e limites
+
+Erros têm formato `{error:"CODIGO"}`. Os mais comuns são `AUTH_REQUIRED` (401), `FORBIDDEN` (403), `NOT_FOUND`/`PC_NOT_FOUND` (404), `SETUP_CLOSED`, conflito de estado/sessão (409), `BODY_TOO_LARGE` (413), limite de pareamento/WoL (429), `NVS_WRITE_FAILED` (500) e `PROTOCOL_VERSION_UNSUPPORTED` (410). Um `202` confirma aceitação/enfileiramento, não que o PC acordou, reiniciou ou desligou fisicamente.
+
+O padrão de firmware retorna `tailscale.built:false`; a variante MicroLink inclui estado de túnel e métricas. A auth key nunca é devolvida. API e WebSocket não têm TLS; restrinja-os à LAN confiável ou à rede privada configurada.

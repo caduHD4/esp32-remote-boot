@@ -3,7 +3,7 @@
 | Sintoma | Verificação/ação |
 |---|---|
 | ESP32 sem aparecer no USB | Cabo de dados, porta, driver USB e modo de download da placa; o profile usa USB CDC C3. Não aguarda serial conectado para operar. |
-| Setup não abre | Veja senha do AP no monitor serial; acesse diretamente 192.168.4.1. Não depende do popup de captive portal. |
+| Setup não abre | Acesse o IP da ESP na LAN configurada em config.local.json. Sem senha salva, a tela pede senha e confirmação; com senha salva, apresenta o login normal. Não existe AP de recuperação. |
 | Wi-Fi não conecta | SSID 2,4 GHz/credenciais, sinal e DHCP. Após timeout aparece AP recuperável; configuração antiga exige token existente. |
 | `WiFiUdp parsePacket(): could not receive data: 9` contínuo | Atualize para 2.1.1 ou superior. Builds 2.1.0 processavam o DNS mesmo no setup direto pela LAN. |
 | SCHEMA_LOCKED | Flash preservada; volte para versão compatível ou restaure explicitamente. Não há apagamento automático. |
@@ -16,6 +16,8 @@
 | PC não liga | Fonte independente ESP32, NIC Ethernet com energia, WoL no último OS desligado, ErP, Fast Startup, broadcast/isolamento do AP. |
 | 409 PC_ALREADY_ON | Boot normal não reinicia. Use reboot explícito com agent ou force somente para reenviar WoL. |
 | iPXE não obtém rede | Confirme cabo, DHCP, driver iPXE, net0 e VLAN. Builder usa primeira NIC; setups multi-NIC precisam ajuste. |
+| `net0 no such network device` | A interface não foi detectada. Placas sem driver nativo na revisão iPXE usada, como RTL8125 (`10ec:8125`), dependem do driver UEFI/SNP: habilite Network Stack e IPv4 PXE Support na BIOS. Confira as interfaces com `ifstat` no shell iPXE e veja [BIOS e rede UEFI](bios.md#rede-disponível-no-ipxe). |
+| `file:autoexec.ipxe not found` / `file:/autoexec.ipxe not found` | Se o script embutido continua e mostra Remote Boot, investigue o erro posterior; essas mensagens não indicam que seja necessário criar um autoexec.ipxe externo. |
 | iPXE não encontra ESP32 | IP embutido deve ser o IP reservado correto. Rebuild após mudança. Teste GET /boot.ipxe na LAN. |
 | `Cannot identify created entry` | Atualize o repositório. Builds anteriores não reconheciam saídas de `efibootmgr` que exibiam `HD(...)` após o rótulo. Antes de repetir, remova somente a entrada duplicada após comparar seu caminho com `efibootmgr -v`. |
 | EFI NOT_FOUND | Entry/ESP/assinatura/path válidos? Short forms fora de HD() não têm expansão integral. Escolha entry completa/compatível. |

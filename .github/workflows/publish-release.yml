@@ -15,7 +15,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     uses: ./.github/workflows/native-agent.yml
     permissions:
-      contents: read
+      contents: write
   release:
     needs: build
     runs-on: ubuntu-22.04
@@ -38,10 +38,10 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib, os, pathlib, re, shutil
-          source = pathlib.Path('firmware/src/main.cpp').read_text()
-          match = re.search(r'constexpr char Version\[\]="([0-9]+\.[0-9]+\.[0-9]+-experimental)";', source)
+          source = pathlib.Path('firmware/include/app_model.hpp').read_text()
+          match = re.search(r'constexpr char Version\[\]="([0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+)";', source)
           if not match:
-              raise SystemExit('This workflow publishes experimental versions only; update Version in the firmware first.')
+              raise SystemExit('This workflow publishes alpha versions only; update Version in app_model.hpp first.')
           tag = 'v' + match[1]
           assets = pathlib.Path('release-assets')
           assets.mkdir()
@@ -66,7 +66,7 @@ jobs:
               'Baixe também **Source code (zip)** desta versão para obter os installers e a documentação. '
               'Passe o caminho do executável baixado ao installer; exemplos no [guia de instalação]('
               'https://github.com/' + os.environ['GH_REPO'] + '/blob/' + tag + '/docs/native-agent.md).\n\n'
-              '**Atualize a ESP32 para o firmware 2.1 ou posterior compatível antes de migrar os agents.** '
+              '**Requer firmware 3 e pareamento v2; versões anteriores são incompatíveis.** '
               'Esta release contém os agents; compile/instale o firmware conforme o README.\n\n'
               'WebSocket persistente, keepalive de 60 s, reconexão e reboot/shutdown com ACK e sessão. '
               'Os dois executáveis foram compilados e passaram no self-test, com comandos de energia simulados. '
