@@ -163,7 +163,7 @@ void appendStatus(JsonObject d) {
     d["last_selected_target"]=idText(state.lastSelected); d["pending_created_at_ms"]=state.created; d["pending_ttl_s"]=state.ttl/1000;
     const rb::MicrolinkSnapshot tail=microlink.snapshot(); JsonObject tailscale=d["tailscale"].to<JsonObject>();
     tailscale["built"]=tail.built; tailscale["configured"]=tail.configured; tailscale["connected"]=tail.connected;
-    tailscale["state"]=tail.state; tailscale["ip"]=tail.ip; tailscale["peers"]=tail.peers;
+    tailscale["state"]=tail.state; tailscale["ip"]=String(tail.ip); tailscale["peers"]=tail.peers;
     tailscale["control_online"]=tail.controlOnline; tailscale["derp_online"]=tail.derpOnline; tailscale["derp_server_info"]=tail.serverInfo;
     tailscale["map_updates"]=tail.mapUpdates; tailscale["reconnects"]=tail.reconnects; tailscale["tls_deferred"]=tail.tlsDeferred;
     tailscale["wg_encrypted_rx"]=tail.encryptedRx; tailscale["wg_authenticated_rx"]=tail.authenticatedRx; tailscale["authenticated_age_ms"]=tail.authenticatedAgeMs;
