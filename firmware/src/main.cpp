@@ -35,11 +35,19 @@ void setup() {
     routes();startAgentSocket();startSinric();microlink.begin(locked,setupMode,WiFi.status()==WL_CONNECTED,config["tailscale_auth_key"]|"",config["tailscale_device_name"]|"");logEvent(locked?"CONFIG_LOCKED_PRESERVED":"READY");
 }
 void loop() {
-    if(sinricStarted&&microlink.beginSinricHandle(sinricOnline)) {
+    if(WiFi.status()==WL_CONNECTED&&sinricStarted&&microlink.beginSinricHandle(sinricOnline)) {
         SinricPro.handle();microlink.endSinricHandle(sinricOnline,[]{SinricPro.stop();SinricPro.begin(config["sinric_app_key"].as<const char*>(),config["sinric_app_secret"].as<const char*>());});
         for(int i=0;i<8;++i)if(rb::sinricResetDue(slotReset[i],millis())) {SinricProSwitch& device=SinricPro[slotIds[i]];slotReset[i]=rb::nextSinricReset(millis(),device.sendPowerStateEvent(false));}
     }
     bool connected=WiFi.status()==WL_CONNECTED;wifiReconnect.observe(connected,millis());
+    // Leave time for the SDK's automatic association/DHCP. If it stalls,
+    // reconnect using the existing STA configuration; never clear/reapply it.
+    if(!connected&&strlen(REMOTE_BOOT_LOCAL_WIFI_SSID)&&wifiReconnect.due(millis())) {
+        const bool requested=WiFi.reconnect();wifiReconnect.recordAttempt(millis());
+        logEvent(requested?"WIFI_RECONNECT_ATTEMPT":"WIFI_RECONNECT_FAILED");
+        Serial.printf("Wi-Fi recovery: accepted=%d attempts=%u\n",requested,wifiReconnect.attempts());
+    }
+    if(!connected&&wifiAddressReported) {wifiAddressReported=false;logEvent("WIFI_OFFLINE");}
     if(connected&&!wifiAddressReported) {Serial.println("Wi-Fi connected: "+WiFi.localIP().toString());wifiAddressReported=true;}
     server.handleClient();agentSocketTick();wolTick();microlink.tick(connected);
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0)ESP.restart();delay(1);

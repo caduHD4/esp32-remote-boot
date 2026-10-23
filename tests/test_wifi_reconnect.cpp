@@ -23,6 +23,13 @@ int main() {
 
     policy.observe(false, 50001);
     assert(!policy.connected());
-    assert(policy.due(50001));
+    assert(!policy.due(50001));
+    assert(!policy.due(70000));
+    assert(policy.due(70001));
+
+    policy.reset(0xfffffff0u);
+    policy.recordAttempt(0xfffffff0u);
+    assert(!policy.due(0x20u));
+    assert(policy.due(0x4e10u));
     puts("PASS: Wi-Fi reconnect policy");
 }

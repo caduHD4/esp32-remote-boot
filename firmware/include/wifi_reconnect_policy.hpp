@@ -22,7 +22,7 @@ public:
         if (connected_) {
             connected_ = false;
             attempts_ = 0;
-            nextAttemptAt_ = now;
+            nextAttemptAt_ = now + AssociationWindowMs;
             delayMs_ = InitialDelayMs;
         }
     }
