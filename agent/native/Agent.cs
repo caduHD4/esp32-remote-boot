@@ -174,8 +174,9 @@ public static class Program {
         if(replies.Count==0)return 1;Console.WriteLine(replies[0].Address);return 0;
     }
     static int ApplyProfile(string[] args) {
-        string profilePath="",configPath="",confirm="";
-        for(int i=1;i<args.Length;i++) {
+        string profilePath="",configPath="",confirm="";int start=1;
+        if(args.Length>1&&!args[1].StartsWith("--",StringComparison.Ordinal)){profilePath=args[1];start=2;}
+        for(int i=start;i<args.Length;i++) {
             switch(args[i]) {
                 case "--profile":profilePath=Value(args,ref i,"--profile");break;
                 case "--config":configPath=Value(args,ref i,"--config");break;
@@ -187,8 +188,9 @@ public static class Program {
         DiscoveryRuntime.ApplyProfile(profilePath,configPath,confirm);Console.WriteLine("Discovery profile applied");return 0;
     }
     static async Task<int> ReportPreparation(string[] args) {
-        string manifestPath="",configPath="";
-        for(int i=1;i<args.Length;i++) {
+        string manifestPath="",configPath="";int start=1;
+        if(args.Length>1&&!args[1].StartsWith("--",StringComparison.Ordinal)){manifestPath=args[1];start=2;}
+        for(int i=start;i<args.Length;i++) {
             switch(args[i]){case "--manifest":manifestPath=Value(args,ref i,"--manifest");break;case "--config":configPath=Value(args,ref i,"--config");break;default:throw new Exception("Unknown option "+args[i]);}
         }
         if(manifestPath.Length==0||configPath.Length==0)throw new Exception("--report-preparation requires --manifest and --config");

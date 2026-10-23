@@ -107,32 +107,46 @@ public sealed class DiscoveryClient {
     public List<DiscoveryReply> Discover(DiscoveryProfile expected,int timeoutMs,CancellationToken token) {
         if(timeoutMs<100||timeoutMs>60000)throw new ArgumentOutOfRangeException(nameof(timeoutMs));
         var nonce=RandomNumberGenerator.GetBytes(16);var id=expected==null?new byte[16]:DiscoveryProtocol.HexBytes(expected.DeviceId);
-        var query=DiscoveryProtocol.Query(nonce,id);var destinations=Destinations(expected);
-        using var socket=new Socket(AddressFamily.InterNetwork,SocketType.Dgram,ProtocolType.Udp){EnableBroadcast=true};
-        socket.Bind(new IPEndPoint(IPAddress.Any,0));
-        foreach(var destination in destinations){try{socket.SendTo(query,destination);}catch(SocketException){}}
-        var results=new List<DiscoveryReply>();var seen=new HashSet<string>(StringComparer.Ordinal);
-        var deadline=DateTime.UtcNow.AddMilliseconds(timeoutMs);var idleUntil=DateTime.MaxValue;var buffer=new byte[512];
-        while(DateTime.UtcNow<deadline) {
-            token.ThrowIfCancellationRequested();
-            if(results.Count>0&&DateTime.UtcNow>=idleUntil)break;
-            int remain=(int)Math.Max(1,(deadline-DateTime.UtcNow).TotalMilliseconds);
-            socket.ReceiveTimeout=Math.Min(remain,results.Count>0?500:remain);
-            EndPoint remote=new IPEndPoint(IPAddress.Any,0);
-            int length;
-            try{length=socket.ReceiveFrom(buffer,ref remote);}catch(SocketException ex) when(ex.SocketErrorCode==SocketError.TimedOut){if(results.Count>0)break;continue;}catch(SocketException){break;}
-            if(remote is not IPEndPoint source)continue;
-            if(!DiscoveryProtocol.TryParse(buffer.AsSpan(0,length).ToArray(),source,nonce,expected,allowLoopback,out var reply)||!seen.Add(reply.DeviceId))continue;
-            results.Add(reply);if(expected!=null)return results;idleUntil=DateTime.UtcNow.AddMilliseconds(500);
-        }
-        return results;
+        var query=DiscoveryProtocol.Query(nonce,id);var sockets=CreateSockets();
+        try {
+            void SendAll(){foreach(var (socket,broadcast) in sockets)foreach(var destination in Destinations(broadcast,expected)){try{socket.SendTo(query,destination);}catch(SocketException){}}}
+            var results=new List<DiscoveryReply>();var seen=new HashSet<string>(StringComparer.Ordinal);
+            var deadline=DateTime.UtcNow.AddMilliseconds(timeoutMs);var idleUntil=DateTime.MaxValue;var nextSend=DateTime.MinValue;var buffer=new byte[512];
+            while(DateTime.UtcNow<deadline) {
+                token.ThrowIfCancellationRequested();
+                var now=DateTime.UtcNow;if(results.Count>0&&now>=idleUntil)break;
+                if(results.Count==0&&now>=nextSend){SendAll();nextSend=now.AddMilliseconds(1000);}
+                int remain=(int)Math.Max(1,(deadline-DateTime.UtcNow).TotalMilliseconds);
+                int untilSend=(int)Math.Max(1,(nextSend-DateTime.UtcNow).TotalMilliseconds);
+                var readable=new List<Socket>(sockets.Count);foreach(var (socket,_) in sockets)readable.Add(socket);
+                int wait=Math.Min(remain,Math.Min(results.Count>0?500:remain,untilSend));
+                try{Socket.Select(readable,null,null,wait*1000);}catch(SocketException){break;}
+                foreach(var socket in readable) {
+                    EndPoint remote=new IPEndPoint(IPAddress.Any,0);int length;
+                    try{length=socket.ReceiveFrom(buffer,ref remote);}catch(SocketException){continue;}
+                    if(remote is not IPEndPoint source)continue;
+                    if(!DiscoveryProtocol.TryParse(buffer.AsSpan(0,length).ToArray(),source,nonce,expected,allowLoopback,out var reply)||!seen.Add(reply.DeviceId))continue;
+                    results.Add(reply);if(expected!=null)return results;idleUntil=DateTime.UtcNow.AddMilliseconds(500);
+                }
+            }
+            return results;
+        } finally {foreach(var (socket,_) in sockets)socket.Dispose();}
     }
-    List<IPEndPoint> Destinations(DiscoveryProfile expected) {
-        if(testDestinations!=null)return testDestinations.ToList();
-        var list=new List<IPEndPoint>();var seen=new HashSet<string>(StringComparer.Ordinal);
-        void Add(IPAddress address){if(address==null)return;var key=address.ToString();if(seen.Add(key))list.Add(new IPEndPoint(address,DiscoveryProtocol.Port));}
-        if(expected!=null&&IPAddress.TryParse(expected.LastIpv4,out var cached))Add(cached);
-        Add(IPAddress.Broadcast);
+    List<(Socket socket,IPAddress broadcast)> CreateSockets() {
+        var sockets=new List<(Socket,IPAddress)>();
+        if(testDestinations!=null) {
+            var socket=NewSocket();socket.Bind(new IPEndPoint(IPAddress.Any,0));sockets.Add((socket,null));return sockets;
+        }
+        foreach(var (address,broadcast) in LocalInterfaces()) {
+            var socket=NewSocket();
+            try{socket.Bind(new IPEndPoint(address,0));sockets.Add((socket,broadcast));}catch(SocketException){socket.Dispose();}
+        }
+        if(sockets.Count==0){var socket=NewSocket();socket.Bind(new IPEndPoint(IPAddress.Any,0));sockets.Add((socket,null));}
+        return sockets;
+    }
+    static Socket NewSocket()=>new Socket(AddressFamily.InterNetwork,SocketType.Dgram,ProtocolType.Udp){EnableBroadcast=true};
+    static List<(IPAddress address,IPAddress broadcast)> LocalInterfaces() {
+        var result=new List<(IPAddress,IPAddress)>();
         foreach(var network in NetworkInterface.GetAllNetworkInterfaces()) {
             if(network.OperationalStatus!=OperationalStatus.Up||network.NetworkInterfaceType==NetworkInterfaceType.Loopback||network.NetworkInterfaceType==NetworkInterfaceType.Tunnel)continue;
             string name=network.Name.ToLowerInvariant();if(name.Contains("tailscale")||name.StartsWith("wg")||name.Contains("vpn"))continue;
@@ -140,17 +154,25 @@ public sealed class DiscoveryClient {
                 if(unicast.Address.AddressFamily!=AddressFamily.InterNetwork||unicast.IPv4Mask==null)continue;
                 byte[] ip=unicast.Address.GetAddressBytes(),mask=unicast.IPv4Mask.GetAddressBytes(),broadcast=new byte[4];
                 for(int i=0;i<4;i++)broadcast[i]=(byte)(ip[i]|~mask[i]);
-                if(DiscoveryProtocol.ValidIpv4(broadcast))Add(new IPAddress(broadcast));
+                if(DiscoveryProtocol.ValidIpv4(broadcast))result.Add((unicast.Address,new IPAddress(broadcast)));
             }
         }
-        return list;
+        return result;
+    }
+    List<IPEndPoint> Destinations(IPAddress broadcast,DiscoveryProfile expected) {
+        if(testDestinations!=null)return testDestinations.ToList();
+        var list=new List<IPEndPoint>();var seen=new HashSet<string>(StringComparer.Ordinal);
+        void Add(IPAddress address){if(address==null)return;var key=address.ToString();if(seen.Add(key))list.Add(new IPEndPoint(address,DiscoveryProtocol.Port));}
+        if(expected!=null&&IPAddress.TryParse(expected.LastIpv4,out var cached))Add(cached);
+        if(expected!=null&&expected.Hostname.Length>0){try{foreach(var address in Dns.GetHostAddresses(expected.Hostname))if(address.AddressFamily==AddressFamily.InterNetwork)Add(address);}catch(SocketException){}catch(ArgumentException){}}
+        Add(IPAddress.Broadcast);Add(broadcast);return list;
     }
 }
 public static class DiscoveryRuntime {
-    public static void EnsureEndpoint(Config config,string configPath,CancellationToken token) {
+    public static void EnsureEndpoint(Config config,string configPath,CancellationToken token,DiscoveryClient client=null) {
         if(config==null||!config.BlindMode)return;
         if(string.IsNullOrEmpty(configPath))throw new Exception("Blind configuration path is required");
-        var profile=DiscoveryProfile.FromConfig(config);var replies=new DiscoveryClient().Discover(profile,10000,token);
+        var profile=DiscoveryProfile.FromConfig(config);var replies=(client??new DiscoveryClient()).Discover(profile,10000,token);
         if(replies.Count==0)throw new Exception("ESP discovery failed");
         var reply=replies[0];config.Url=new UriBuilder("http",reply.Address.ToString(),reply.HttpPort).Uri;config.WsPort=reply.WsPort;config.Save(configPath);
     }

@@ -105,21 +105,20 @@ public static class DiscoverySelfTest {
         key.Dispose();wrongKey.Dispose();
     }
     static void BlindEndpoint() {
-        var address=LanAddress();
-        if(address==null){Console.WriteLine("SKIP: no non-loopback LAN address for blind endpoint test");return;}
         string directory=Temp();
-        var (key,publicKey)=Key();var profile=LoopbackProfile(publicKey,address.ToString());
+        var (key,publicKey)=Key();var profile=LoopbackProfile(publicKey);profile.LastIpv4="192.168.50.80";
         using var server=new Socket(AddressFamily.InterNetwork,SocketType.Dgram,ProtocolType.Udp);
-        server.Bind(new IPEndPoint(address,DiscoveryProtocol.Port));server.ReceiveTimeout=3000;
-        var responder=new Thread(()=>Respond(server,key,publicKey,profile.DeviceId,address));responder.Start();
+        server.Bind(new IPEndPoint(IPAddress.Loopback,DiscoveryProtocol.Port));server.ReceiveTimeout=3000;
+        var responder=new Thread(()=>Respond(server,key,publicKey,profile.DeviceId,IPAddress.Loopback));responder.Start();
         try {
             string configPath=Path.Combine(directory,"agent.json");
-            var config=new Config{Url=new Uri("http://"+address),Token=new string('a',64),PcId=profile.PcId,AgentId=new string('2',32),WsPort=81,
+            var config=new Config{Url=new Uri("http://192.168.50.80"),Token=new string('a',64),PcId=profile.PcId,AgentId=new string('2',32),WsPort=81,
                 DeviceId=profile.DeviceId,PublicKey=profile.PublicKey,Fingerprint=profile.Fingerprint,DiscoveryVersion=1,ModeRevision=1,BlindMode=true};
             config.Save(configPath);
-            DiscoveryRuntime.EnsureEndpoint(config,configPath,CancellationToken.None);
+            var client=new DiscoveryClient(true,new[]{new IPEndPoint(IPAddress.Loopback,DiscoveryProtocol.Port)});
+            DiscoveryRuntime.EnsureEndpoint(config,configPath,CancellationToken.None,client);
             responder.Join();var saved=Config.Read(configPath);
-            Assert(saved.Url.Host==address.ToString()&&saved.BlindMode&&saved.WsPort==81,"blind endpoint was not persisted");
+            Assert(saved.Url.Host==IPAddress.Loopback.ToString()&&saved.BlindMode&&saved.WsPort==81,"blind endpoint was not persisted");
         } finally {server.Dispose();Directory.Delete(directory,true);key.Dispose();}
     }
     static void ApplyProfileNormal() {
