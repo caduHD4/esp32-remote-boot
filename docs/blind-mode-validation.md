@@ -28,16 +28,19 @@ A ESP real respondeu à descoberta assinada com a chave fixada. Um perfil com
 IP antigo encontrou o endereço atual por mDNS e confirmou a assinatura antes
 de aceitar o endereço. Não foi necessário alterar o roteador.
 
-A dashboard abre normalmente no celular, conforme teste do usuário. Neste PC,
-transferências TCP apresentaram perdas/interrupções intermitentes, inclusive
-num diagnóstico sem Tailscale e com memória livre. Essa observação não prova
-uma causa no firmware, no AP ou no PC. A imagem completa foi restaurada após
-os diagnósticos; Tailscale não foi desativado na configuração.
+A investigação posterior identificou uma rota local ausente na interface
+cabeada deste PC: mesmo com o cabo conectado, o acesso à ESP saía pelo Wi-Fi,
+onde havia perdas. Reaplicar a conexão cabeada restaurou a rota automática da
+LAN. O teste final teve oito downloads completos da dashboard e vinte pings
+sem perdas; o usuário confirmou abertura e login. Não ficou rota fixa para o
+IP da ESP. Veja [diagnóstico de acesso](network-access-2026-10-23.md).
+A imagem completa foi restaurada após os diagnósticos; Tailscale não foi
+desativado na configuração. O caminho sem fio ainda precisa de nova validação.
 
 Foram corrigidos dois defeitos de transporte identificados no código: o envio
 do HTML agora trata escritas parciais e contrapressão com prazos; cada cliente
 TLS Sinric recebe limite de handshake de três segundos. Essas correções não
-constituem prova de resolução da perda de pacotes deste PC. DNS do serviço
+constituem a correção da rota local descrita acima. DNS do serviço
 Sinric e a pressão de memória da coordenação MicroLink ainda exigem investigação
 separada; não houve redução silenciosa de recursos ou remoção de credenciais.
 
