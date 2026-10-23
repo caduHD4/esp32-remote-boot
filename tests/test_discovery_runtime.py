@@ -15,6 +15,7 @@ arduino=r'''
 #include <cstring>
 #include <string>
 using String=std::string;
+struct SerialType{void println(const char*){}template<class...A>void printf(const char*,A...){}}Serial;
 struct IPAddress {
  uint8_t octets[4]={192,168,50,80};
  uint8_t operator[](int n)const{return octets[n];}
@@ -49,6 +50,7 @@ int lwip_socket(int,int,int){++createCalls;return 7;}
 int lwip_bind(int,const sockaddr*,socklen_t){return 0;}
 int lwip_close(int){++closeCalls;return 0;}
 int lwip_fcntl(int,int,int){return 0;}
+int lwip_setsockopt(int,int,int,const void*,socklen_t){return 0;}
 int lwip_recvfrom(int,void* buffer,size_t capacity,int flags,sockaddr* source,socklen_t* length){
  assert(flags&MSG_DONTWAIT);++receiveCalls;if(!queued)return -1;--queued;
  assert(*length>=sizeof(sockaddr_in));auto* remote=reinterpret_cast<sockaddr_in*>(source);
