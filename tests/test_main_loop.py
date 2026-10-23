@@ -54,6 +54,7 @@ struct Runtime {
  template<class F>void endSinricHandle(bool,F){}
  void tick(bool){}
 } microlink;
+struct Discovery {int ticks=0;bool connected=false;void tick(bool online){++ticks;connected=online;}} discovery;
 struct Server {int ticks=0;void handleClient(){++ticks;}} server;
 void agentSocketTick(){}
 void wolTick(){}
@@ -74,14 +75,14 @@ int main(){
  wifiReconnect.reset(clockNow);wifiReconnect.recordAttempt(clockNow);
  loop();
  assert(SinricPro.handles==0 && "Sinric must not attempt DNS/TLS without an IP");
- assert(server.ticks==1);
+ assert(server.ticks==1);assert(discovery.ticks==1&&!discovery.connected);
  assert(WiFi.reconnects==0 && "allow first association to finish");
  clockNow=21000;loop();
  assert(WiFi.reconnects==1 && "recover even when SDK emits no more reconnect events");
  clockNow=21001;loop();assert(WiFi.reconnects==1);
  clockNow=41000;loop();assert(WiFi.reconnects==2);
  WiFi.state=WL_CONNECTED;clockNow=41001;loop();
- assert(SinricPro.handles==1);assert(WiFi.reconnects==2);
+ assert(SinricPro.handles==1);assert(WiFi.reconnects==2);assert(discovery.connected);
  WiFi.state=0;clockNow=42000;loop();
  assert(WiFi.reconnects==2 && "do not interrupt SDK's immediate auto-reconnect");
  clockNow=61999;loop();assert(WiFi.reconnects==2);

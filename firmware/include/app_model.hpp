@@ -14,12 +14,15 @@
 #include "microlink_runtime.hpp"
 #include "config_store.hpp"
 #include "document_transaction.hpp"
+#include "discovery_runtime.hpp"
+#include "discovery_config.hpp"
 #include "local_wifi.h"
 #include "web_asset.h"
 
 constexpr char Version[]="3.0.0-alpha.1";
 WebServer server(80); WiFiUDP udp; Preferences nvs; rb::ConfigStore store(nvs);
 WebSocketsServer agentSocket(81); JsonDocument config;
+rb::DiscoveryRuntime discovery;
 rb::MicrolinkRuntime microlink;rb::WiFiReconnectPolicy wifiReconnect;
 bool locked=false,setupMode=true,sinricOnline=false,sinricStarted=false,wifiAddressReported=false;
 uint32_t restartAt=0,logIndex=0;String logs[32],slotIds[8];uint32_t slotReset[8]{};
@@ -31,7 +34,7 @@ struct PcRuntime {
     uint8_t wolRemaining=0;
 };
 PcRuntime pcs[rb::MaxPcs];
-struct AgentPresence {String id;uint32_t seen=0;bool reboot=false,shutdown=false;};
+struct AgentPresence {String id;uint32_t seen=0,modeRevision=0;unsigned discoveryVersion=0;bool reboot=false,shutdown=false,blindMode=false;};
 AgentPresence agentPresence[rb::MaxAgents];
 JsonObject findAgent(const String& id);
 AgentPresence* presence(const String& id) {for(auto& a:agentPresence)if(a.id==id)return &a;for(auto& a:agentPresence)if(!a.id.length()||findAgent(a.id).isNull()){a=AgentPresence();a.id=id;return &a;}return nullptr;}
@@ -80,10 +83,11 @@ void defaults(JsonDocument& doc) {
 void pcDefaults(JsonObject pc) {
     pc["pc_id"]=randomHex();pc["name"]="PC";pc["mac"]="";pc["wol_port"]=9;pc["wol_repeat"]=5;pc["wol_interval_ms"]=100;
     pc["pending_ttl_s"]=180;pc["physical_boot_behavior"]="default_target";pc["default_target"]="";pc["fallback_boot_id"]="";
-    pc["systems"].to<JsonArray>();pc["catalog_generation"]=1;
+    pc["systems"].to<JsonArray>();pc["catalog_generation"]=1;rb::discoveryPcDefaults(pc);
 }
 bool hasSystem(JsonObjectConst pc,int id) { if(id<0) return false;for(JsonObjectConst e:pc["systems"].as<JsonArrayConst>()) if(idValue(e["id"])==id&&!e["blocked"].as<bool>()) return true;return false; }
 bool validatePc(JsonObject pc) {
+    if(!rb::discoveryPcValid(pc))return false;
     uint8_t mac[6];const char* name=pc["name"]|"";
     if(!rb::validOpaqueId(pc["pc_id"])||!*name||strlen(name)>63||!parseMac(pc["mac"],mac)) return false;
     int port=pc["wol_port"],repeat=pc["wol_repeat"],interval=pc["wol_interval_ms"],ttl=pc["pending_ttl_s"];
@@ -157,13 +161,17 @@ void appendPcStatus(PcRuntime& pc,JsonObject d) {
 void appendStatus(JsonObject d) {
     d["version"]=Version;d["setup_mode"]=setupMode;d["config_locked"]=locked;d["ip"]=WiFi.localIP().toString();d["rssi"]=WiFi.RSSI();d["wifi_connected"]=WiFi.status()==WL_CONNECTED;
     d["wifi_reconnect_attempts"]=wifiReconnect.attempts();d["wifi_retry_in_ms"]=wifiReconnect.retryInMs(millis());d["sinric_online"]=sinricOnline;d["uptime"]=millis()/1000;d["heap"]=ESP.getFreeHeap();
+    discovery.status(d["discovery"].to<JsonObject>());
     d["pairing_window_open"]=pairingLimits.open(millis());d["max_pcs"]=rb::MaxPcs;d["max_agents"]=rb::MaxAgents;
     auto tail=microlink.snapshot();JsonObject t=d["tailscale"].to<JsonObject>();
     t["built"]=tail.built;t["configured"]=tail.configured;t["connected"]=tail.connected;t["state"]=tail.state;t["ip"]=String(tail.ip);t["peers"]=tail.peers;t["control_online"]=tail.controlOnline;t["derp_online"]=tail.derpOnline;t["derp_server_info"]=tail.serverInfo;
     t["map_updates"]=tail.mapUpdates;t["reconnects"]=tail.reconnects;t["tls_deferred"]=tail.tlsDeferred;t["wg_encrypted_rx"]=tail.encryptedRx;t["wg_authenticated_rx"]=tail.authenticatedRx;t["authenticated_age_ms"]=tail.authenticatedAgeMs;t["heap_free"]=tail.heapFree;t["heap_minimum"]=tail.heapMinimum;t["largest_block"]=tail.largestBlock;
 }
-void appendAgents(JsonArray arr) {for(JsonObject a:config["agents"].as<JsonArray>()) {JsonObject out=arr.add<JsonObject>();for(const char* k:{"agent_id","pc_id","installation_name","hostname","os"})out[k]=a[k];PcRuntime* pc=runtime(a["pc_id"]|"");bool online=pc&&pc->agentId==String(a["agent_id"]|"")&&pc->state.online(millis());AgentPresence* last=presence(a["agent_id"]|"");out["online"]=online;out["connected"]=online;out["id"]=a["agent_id"];out["last_seen"]=last&&last->seen?String(uint32_t(millis()-last->seen)/1000)+" s atrás (desde o reinício da ESP)":String("");out["permissions"]["reboot"]=last&&last->reboot;out["permissions"]["shutdown"]=last&&last->shutdown;}}
-void copyPcMetadata(JsonObject out,JsonObjectConst pc) {for(JsonPairConst value:pc)if(strcmp(value.key().c_str(),"systems"))out[value.key().c_str()]=value.value();}
+void appendAgents(JsonArray arr) {for(JsonObject a:config["agents"].as<JsonArray>()) {JsonObject out=arr.add<JsonObject>();for(const char* k:{"agent_id","pc_id","installation_name","hostname","os"})out[k]=a[k];PcRuntime* pc=runtime(a["pc_id"]|"");bool online=pc&&pc->agentId==String(a["agent_id"]|"")&&pc->state.online(millis());AgentPresence* last=presence(a["agent_id"]|"");out["online"]=online;out["connected"]=online;out["id"]=a["agent_id"];out["last_seen"]=last&&last->seen?String(uint32_t(millis()-last->seen)/1000)+" s atrás (desde o reinício da ESP)":String("");out["permissions"]["reboot"]=last&&last->reboot;out["permissions"]["shutdown"]=last&&last->shutdown;
+    out["observed_discovery_version"]=last?last->discoveryVersion:0;out["observed_blind_mode"]=last&&last->blindMode;out["observed_mode_revision"]=last?last->modeRevision:0;
+    out["prepared_discovery_version"]=a["prepared_discovery_version"]|0;out["prepared_blind_mode"]=a["prepared_blind_mode"]|false;out["prepared_mode_revision"]=a["prepared_mode_revision"]|uint32_t(0);out["boot_prepared"]=a["boot_prepared"]|false;
+    for(const char* k:{"ipxe_sha256","loader_sha256"})if(!a[k].isNull())out[k]=a[k];}}
+void copyPcMetadata(JsonObject out,JsonObjectConst pc) {for(JsonPairConst value:pc)if(strcmp(value.key().c_str(),"systems"))out[value.key().c_str()]=value.value();rb::discoveryPcDefaults(out);}
 void bootstrap() {
     JsonDocument doc;JsonObject globals=doc["config"].to<JsonObject>();
     for(JsonPair p:config.as<JsonObject>()) { String key=p.key().c_str();if(key=="pcs"||key=="agents") continue;if(key=="admin_token"||key=="tailscale_auth_key"||key=="sinric_app_key"||key=="sinric_app_secret") globals[key+"_set"]=strlen(p.value().as<const char*>()?p.value().as<const char*>():"")>0;else globals[key]=p.value(); }

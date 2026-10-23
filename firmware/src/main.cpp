@@ -49,6 +49,6 @@ void loop() {
     }
     if(!connected&&wifiAddressReported) {wifiAddressReported=false;logEvent("WIFI_OFFLINE");}
     if(connected&&!wifiAddressReported) {Serial.println("Wi-Fi connected: "+WiFi.localIP().toString());wifiAddressReported=true;}
-    server.handleClient();agentSocketTick();wolTick();microlink.tick(connected);
+    server.handleClient();agentSocketTick();wolTick();discovery.tick(connected);microlink.tick(connected);
     if(restartAt&&static_cast<int32_t>(millis()-restartAt)>=0)ESP.restart();delay(1);
 }

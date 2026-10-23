@@ -25,7 +25,8 @@ void startAgentSocket() {
             pc=runtime(binding["pc_id"]|"");if(!pc||pc->socket>=0) { agentSocket.disconnect(num);return; }
             pc->socket=num;socketWaiting[num]=false;pc->session=session;pc->agentId=binding["agent_id"].as<String>();pc->sentCommand="";pc->power.clear();
             pc->reboot=doc["permissions"]["reboot"]|false;pc->shutdown=doc["permissions"]["shutdown"]|false;
-            AgentPresence* last=presence(pc->agentId);if(last){last->seen=millis();last->reboot=pc->reboot;last->shutdown=pc->shutdown;}
+            AgentPresence* last=presence(pc->agentId);if(last){last->seen=millis();last->reboot=pc->reboot;last->shutdown=pc->shutdown;last->discoveryVersion=0;last->modeRevision=0;last->blindMode=false;
+                if(doc["discovery_version"].is<unsigned>()&&doc["discovery_version"].as<unsigned>()==1&&doc["blind_mode"].is<bool>()&&doc["mode_revision"].is<uint32_t>()&&doc["mode_revision"].as<uint32_t>()>0){last->discoveryVersion=1;last->modeRevision=doc["mode_revision"];last->blindMode=doc["blind_mode"];}}
             pc->hostname=String(doc["hostname"]|"").substring(0,63);pc->os=String(doc["os"]|"").substring(0,63);pc->state.heartbeat(millis(),idValue(doc["boot_id"]));pc->sentDiscovery=pc->discovery;
             doc.clear();doc["type"]="ready";socketIdentity(*pc,doc);socketReply(num,doc);logEvent("AGENT_CONNECTED");return;
         }
