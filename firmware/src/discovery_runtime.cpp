@@ -3,6 +3,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <lwip/sockets.h>
 #include <esp_system.h>
 #include <mbedtls/ecp.h>
 #include <mbedtls/ecdsa.h>
@@ -58,25 +59,46 @@ bool DiscoveryRuntime::sign(uint8_t* reply){
     mbedtls_mpi_free(&r);mbedtls_mpi_free(&s);return okay;
 }
 void DiscoveryRuntime::tick(bool connected){
-    if(!connected){if(listening)socket.stop();listening=false;if(mdnsReady)MDNS.end();mdnsReady=false;services.reset();return;}
-    if(!attempted){if(ESP.getFreeHeap()<32000||ESP.getMaxAllocHeap()<16000)return;prepare();}
+    if(!connected){
+        if(socketFd>=0){lwip_close(socketFd);socketFd=-1;}
+        listening=false;services.reset();return;
+    }
+    if(!attempted){
+        if(ESP.getFreeHeap()<24000||ESP.getMaxAllocHeap()<12000)return;
+        prepare();
+    }
     if(!identityReady)return;
     IPAddress ip=WiFi.localIP();uint8_t address[4]={ip[0],ip[1],ip[2],ip[3]};if(!rb_discovery_valid_ipv4(address))return;
-    if(ip!=activeIp){if(listening)socket.stop();listening=false;if(mdnsReady)MDNS.end();mdnsReady=false;activeIp=ip;services.reset();}
+    if(ip!=activeIp){
+        if(socketFd>=0){lwip_close(socketFd);socketFd=-1;}
+        listening=false;activeIp=ip;services.reset();
+    }
+    // Admission happens before receive/service work, so recovery cannot allocate under pressure.
+    if(ESP.getFreeHeap()<24000||ESP.getMaxAllocHeap()<12000)return;
     if((!listening||!mdnsReady)&&services.due(millis())){
-        if(!listening)listening=socket.begin(RB_DISCOVERY_PORT)==1;
-        if(!mdnsReady){mdnsReady=MDNS.begin(host.c_str());if(mdnsReady)MDNS.addService("remote-boot","udp",RB_DISCOVERY_PORT);}
+        if(!listening){
+            int fd=lwip_socket(AF_INET,SOCK_DGRAM,0);
+            if(fd>=0){
+                sockaddr_in local{};local.sin_family=AF_INET;local.sin_port=htons(RB_DISCOVERY_PORT);local.sin_addr.s_addr=htonl(INADDR_ANY);
+                if(lwip_bind(fd,reinterpret_cast<const sockaddr*>(&local),sizeof local)==0){socketFd=fd;listening=true;}
+                else lwip_close(fd);
+            }
+        }
+        // Keep the responder alive; only a missing service registration is retried.
+        if(!mdnsInitialized)mdnsInitialized=MDNS.begin(host.c_str());
+        if(mdnsInitialized&&!mdnsReady)mdnsReady=MDNS.addService("remote-boot","udp",RB_DISCOVERY_PORT);
     }
     if(!listening)return;
-    int length=socket.parsePacket();if(length<=0)return;
-    // Exactly one datagram per pass; fixed-size storage, oversized input discarded.
-    uint8_t query[RB_DISCOVERY_QUERY_SIZE];
-    if(length!=RB_DISCOVERY_QUERY_SIZE){socket.flush();return;}
-    IPAddress source=socket.remoteIP();uint16_t port=socket.remotePort();uint8_t src[4]={source[0],source[1],source[2],source[3]};
-    if(socket.read(query,sizeof query)!=sizeof query||!rb_discovery_valid_ipv4(src)||!port||!rb_discovery_valid_query(query,sizeof query,identity+4))return;
+    // One nonblocking datagram per pass into a fixed stack buffer; no per-poll heap use.
+    uint8_t datagram[RB_DISCOVERY_MAX_DATAGRAM];sockaddr_in remote{};socklen_t remoteLength=sizeof remote;
+    int length=lwip_recvfrom(socketFd,datagram,sizeof datagram,MSG_DONTWAIT,reinterpret_cast<sockaddr*>(&remote),&remoteLength);
+    if(length!=int(RB_DISCOVERY_QUERY_SIZE))return;
+    uint8_t source[4];memcpy(source,&remote.sin_addr.s_addr,sizeof source);uint16_t port=ntohs(remote.sin_port);
+    if(!rb_discovery_valid_ipv4(source)||!port||!rb_discovery_valid_query(datagram,RB_DISCOVERY_QUERY_SIZE,identity+4))return;
     if(!budget.take(millis(),ESP.getFreeHeap(),ESP.getMaxAllocHeap()))return;
-    uint8_t reply[RB_DISCOVERY_REPLY_SIZE];rb_discovery_reply(reply,query+8,identity+4,address,identity+52);
-    if(sign(reply)&&socket.beginPacket(source,port)){socket.write(reply,sizeof reply);socket.endPacket();}
+    uint8_t reply[RB_DISCOVERY_REPLY_SIZE];rb_discovery_reply(reply,datagram+8,identity+4,address,identity+52);
+    if(!sign(reply))return;
+    lwip_sendto(socketFd,reply,sizeof reply,MSG_DONTWAIT,reinterpret_cast<const sockaddr*>(&remote),remoteLength);
 }
 void DiscoveryRuntime::status(JsonObject out) const {
     out["ready"]=identityReady;out["status"]=state;out["discovery_version"]=1;

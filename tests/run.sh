@@ -14,6 +14,18 @@ g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_credential_policy.cpp" -o
 "$temp/test_credential_policy"
 g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_wifi_reconnect.cpp" -o "$temp/test_wifi_reconnect"
 "$temp/test_wifi_reconnect"
+g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_discovery_protocol.cpp" -o "$temp/test_discovery_protocol"
+"$temp/test_discovery_protocol"
+g++ -std=c++17 -Wall -Wextra -Werror -I"$root/tests" "$root/tests/test_discovery_identity.cpp" -lcrypto -o "$temp/test_discovery_identity"
+"$temp/test_discovery_identity"
+arduinojson=${ARDUINOJSON_INCLUDE:-"$root/.pio/libdeps/esp32c3_4mb/ArduinoJson/src"}
+export ARDUINOJSON_INCLUDE="$arduinojson"
+if [ ! -f "$arduinojson/ArduinoJson.h" ]; then
+  echo "Missing ArduinoJson 7 at $arduinojson; run: pio pkg install -e esp32c3_4mb" >&2
+  exit 1
+fi
+g++ -std=c++17 -Wall -Wextra -Werror -I"$arduinojson" "$root/tests/test_discovery_config.cpp" -o "$temp/test_discovery_config"
+"$temp/test_discovery_config"
 g++ -std=c++17 -Wall -Wextra -Werror "$root/tests/test_boot_dispatch.cpp" -o "$temp/test_boot_dispatch"
 "$temp/test_boot_dispatch"
 g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined "$root/tests/test_power.cpp" -o "$temp/test_power"
@@ -41,6 +53,9 @@ bash "$root/tests/test_pc_boot.sh"
 while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "$root/agent" "$root/installer" "$root/ipxe" "$root/scripts" "$root/tests" -name '*.sh' -print0)
 python3 "$root/tests/test_embed_local_wifi.py"
 python3 "$root/tests/test_main_loop.py"
+python3 "$root/tests/test_discovery_vectors.py"
+python3 "$root/tests/test_discovery_preparation_route.py"
+python3 "$root/tests/test_discovery_runtime.py"
 python3 "$root/tests/test_no_ap_policy.py"
 python3 "$root/tests/test_microlink_build_config.py"
 python3 "$root/tests/test_partition_layout.py"
