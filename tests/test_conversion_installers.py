@@ -32,17 +32,24 @@ def run(scenario):
         efi = box / 'esp/EFI/iPXE'; efi.mkdir(parents=True)
         (efi / 'ipxe.efi').write_bytes(b'old EFI')
         (efi / 'manifest.json').write_bytes(b'old manifest')
-        config = box / 'agent.json'
+        config = box / 'agent/agent.json'; config.parent.mkdir()
         original = dict(protocol=2, pc_id='a'*32, agent_id='c'*32, token='fixture-token-not-real',
                         url='http://192.168.1.20', allow_reboot=True, allow_shutdown=False)
+        if scenario == 'real-native-normal': original['token'] = 'd'*64
         config.write_text(json.dumps(original)); config.chmod(0o600)
         if scenario == 'wrong-pin': original.update(device_id='e'*32)
         if scenario == 'wrong-key-only': original.update(public_key='04'+'0'*128)
         if scenario == 'normal': original.update(blind_mode=True, mode_revision=2, device_id=PROFILE['device_id'], public_key=KEY, fingerprint=PROFILE['fingerprint'], discovery_version=1)
         config.write_text(json.dumps(original))
+        if scenario.startswith('atomic-') or scenario == 'real-native-normal': config.chmod(0o640)
+        if scenario == 'atomic-owner-group':
+            other_groups = [group for group in os.getgroups() if group != os.getgid()]
+            if other_groups: os.chown(config, -1, other_groups[0])
+        original_owner = (config.stat().st_uid, config.stat().st_gid)
+        original_mode = config.stat().st_mode & 0o777
         old = config.read_bytes()
         profile = PROFILE.copy()
-        if scenario == 'normal': profile.update(blind_mode=False, mode_revision=3)
+        if scenario in ('normal', 'real-native-normal'): profile.update(blind_mode=False, mode_revision=3)
         if scenario == 'wrong-pc': profile['pc_id'] = 'd'*32
         profile_file = box / 'profile.json'; profile_file.write_text(json.dumps(profile))
         out = box / 'build'; out.mkdir()
@@ -73,12 +80,24 @@ exec /usr/bin/mv "$@"
         agent_body = '''echo "agent $*" >> "$FIXTURE_ROOT/events"
 if [[ $* == *--self-test* ]]; then exit 0; fi
 if [[ $* == *--apply-profile* ]]; then
+  if [[ $FIXTURE_SCENARIO == real-native-normal ]]; then exec "$RB_REAL_AGENT" "$@"; fi
   [[ $FIXTURE_SCENARIO != apply-fail ]] || exit 4
   python3 - "$@" <<'AGENT'
-import sys,json
+import sys,json,os
 args=sys.argv[1:]; p=json.load(open(args[args.index('--apply-profile')+1])); c=args[args.index('--config')+1]
-d=json.load(open(c));d.update({k:p[k] for k in ('blind_mode','mode_revision','device_id','public_key','fingerprint','discovery_version')});d['url']='http://'+p['last_ipv4'];open(c,'w').write(json.dumps(d))
+d=json.load(open(c));d.update({k:p[k] for k in ('blind_mode','mode_revision','device_id','public_key','fingerprint','discovery_version')});d['url']='http://'+p['last_ipv4'];
+if os.environ['FIXTURE_SCENARIO'].startswith('atomic-'):
+ t=c+'.agent-save';open(t,'w').write(json.dumps(d));os.chmod(t,0o600);os.replace(t,c)
+else: open(c,'w').write(json.dumps(d))
 AGENT
+  [[ $FIXTURE_SCENARIO != atomic-apply-fail ]] || exit 4
+fi
+if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == atomic-report* ]]; then
+  python3 - "$@" <<'REPORT'
+import os,sys
+a=sys.argv[1:];c=a[a.index('--config')+1];t=c+'.agent-save';open(t,'wb').write(open(c,'rb').read());os.chmod(t,0o600);os.replace(t,c)
+REPORT
+  [[ $FIXTURE_SCENARIO != atomic-report-fail ]] || exit 5
 fi
 if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == stale ]]; then exit 5; fi
 '''
@@ -100,12 +119,12 @@ if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == stale ]]; then exit 5
             assert '--apply-profile' not in trace and 'service stop' not in trace and 'efi --' not in trace, detail
             assert (result.returncode == 0) == scenario.startswith('cancel-'), detail
         else:
-            assert (result.returncode != 0) == (scenario in ('stale', 'apply-fail', 'efi-fail')), detail
+            assert (result.returncode != 0) == (scenario in ('stale', 'apply-fail', 'efi-fail', 'atomic-apply-fail', 'atomic-report-fail')), detail
             backup = next((box / 'backups').iterdir())
             assert (backup / 'agent.json').read_bytes() == old, detail
             assert (backup.stat().st_mode & 0o077) == 0, detail
-            if scenario not in ('apply-fail', 'efi-fail'):
-                assert (config.stat().st_mode & 0o777) == 0o600, detail
+            assert (config.stat().st_mode & 0o777) == original_mode and (config.stat().st_uid, config.stat().st_gid) == original_owner, detail
+            if scenario not in ('apply-fail', 'efi-fail', 'atomic-apply-fail'):
                 current = json.loads(config.read_text())
                 for k in ('pc_id', 'agent_id', 'token', 'allow_reboot', 'allow_shutdown'): assert current[k] == original[k], detail
                 assert current['blind_mode'] is profile['blind_mode'], detail
@@ -118,11 +137,27 @@ if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == stale ]]; then exit 5
                 assert again.returncode == 0, (again.stdout, again.stderr)
             if scenario == 'inactive': assert 'service stop' not in trace and 'service start' not in trace, detail
             if scenario == 'success':
-                state_file = backup / 'state.json'; state = json.loads(state_file.read_text()); saved = state.copy(); state['partuuid'] = 'ffffffff-ffff-ffff-ffff-ffffffffffff'; state_file.write_text(json.dumps(state))
+                state_file = backup / 'state.json'; saved = state_file.read_bytes(); state = json.loads(saved); state['partuuid'] = 'ffffffff-ffff-ffff-ffff-ffffffffffff'; state_file.write_text(json.dumps(state))
                 refused = subprocess.run(['bash', str(root / 'installer/linux/install.sh'), '--rollback', str(backup)], input='RESTORE\n', text=True, capture_output=True, env=env, timeout=20)
                 assert refused.returncode != 0 and (efi / 'ipxe.efi').read_bytes() == b'new EFI', (refused.stdout, refused.stderr)
-                state_file.write_text(json.dumps(saved))
+                state_file.write_bytes(saved)
+            sentinel = box / 'unrelated.txt'; sentinel.write_bytes(b'untouched')
+            if scenario == 'rollback-staged-link':
+                for destination in (config, installed, efi / 'ipxe.efi', efi / 'manifest.json'):
+                    destination.with_name(destination.name+'.restore').symlink_to(sentinel)
+            if scenario in ('rollback-bad-backup', 'rollback-ancestor', 'rollback-escaped-target'):
+                saved_binary = (backup / 'agent.bin').read_bytes(); saved_state = (backup / 'state.json').read_bytes(); saved_integrity = (backup / 'integrity.json').read_bytes(); current_config = config.read_bytes()
+                if scenario == 'rollback-bad-backup': (backup / 'agent.bin').write_bytes(b'corrupted')
+                if scenario == 'rollback-ancestor': config.parent.rename(box / 'real-agent'); config.parent.symlink_to(box / 'real-agent', target_is_directory=True)
+                if scenario == 'rollback-escaped-target':
+                    state = json.loads(saved_state); state['target'] = str(box); (backup / 'state.json').write_text(json.dumps(state))
+                    inventory = json.loads(saved_integrity); inventory['state.json'] = hashlib.sha256((backup / 'state.json').read_bytes()).hexdigest(); (backup / 'integrity.json').write_text(json.dumps(inventory))
+                refused = subprocess.run(['bash', str(root / 'installer/linux/install.sh'), '--rollback', str(backup)], input='RESTORE\n', text=True, capture_output=True, env=env, timeout=20)
+                assert refused.returncode != 0 and config.read_bytes() == current_config, (scenario, refused.stdout, refused.stderr)
+                if scenario == 'rollback-ancestor': config.parent.unlink(); (box / 'real-agent').rename(config.parent)
+                (backup / 'agent.bin').write_bytes(saved_binary); (backup / 'state.json').write_bytes(saved_state); (backup / 'integrity.json').write_bytes(saved_integrity)
             rolled = subprocess.run(['bash', str(root / 'installer/linux/install.sh'), '--rollback', str(backup)], input='RESTORE\n', text=True, capture_output=True, env=env, timeout=20)
+            assert sentinel.read_bytes() == b'untouched' and not config.is_symlink(), (scenario, rolled.stdout, rolled.stderr)
             assert rolled.returncode == 0, (detail, rolled.stdout, rolled.stderr)
             assert config.read_bytes() == old and installed.read_bytes() == old_binary and (efi / 'ipxe.efi').read_bytes() == b'old EFI' and (efi / 'manifest.json').read_bytes() == b'old manifest', detail
             trace = (box / 'events').read_text()
@@ -131,5 +166,6 @@ if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == stale ]]; then exit 5
 
 
 if __name__ == '__main__':
-    for case in ('success', 'normal', 'rerun', 'inactive', 'wrong-pc', 'wrong-mode', 'wrong-revision', 'wrong-device', 'wrong-pin', 'wrong-key-only', 'bad-hash', 'cancel-trust', 'cancel-install', 'apply-fail', 'efi-fail', 'stale'):
+    import sys
+    for case in (sys.argv[1:] or ('success', 'normal', 'rerun', 'inactive', 'wrong-pc', 'wrong-mode', 'wrong-revision', 'wrong-device', 'wrong-pin', 'wrong-key-only', 'bad-hash', 'cancel-trust', 'cancel-install', 'apply-fail', 'efi-fail', 'stale', 'atomic-apply', 'atomic-owner-group', 'atomic-report', 'atomic-apply-fail', 'atomic-report-fail', 'rollback-staged-link', 'rollback-bad-backup', 'rollback-ancestor', 'rollback-escaped-target')):
         run(case)

@@ -62,6 +62,12 @@ sudo bash installer/linux/install.sh --rollback /var/backups/remote-boot/BACKUP
 ./installer/windows/install.ps1 -Rollback 'C:\ProgramData\RemoteBoot\backup-TIMESTAMP-ID'
 ```
 
+Backups include a SHA256 inventory checked before restoring any file. Recovery
+rejects symbolic links/reparse points in destination paths and their ancestors
+and uses fresh exclusive temporary files. Unsealed, incomplete or corrupted
+backups are refused. Configuration ownership/mode/ACL is reapplied after native
+profile/report writes, including failure paths.
+
 Confirm with `RESTORE`. Keep/mount the original ESP; rollback checks its GPT
 partition identity. It restores only the selected agent and EFI files. It
 never imports global firmware snapshots or resets BootOrder/BootNext. A

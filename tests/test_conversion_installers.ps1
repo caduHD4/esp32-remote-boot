@@ -1,18 +1,22 @@
 # Real PowerShell installer flow; OS, EFI and network calls are in-memory fixtures.
+param([string]$Only,[string]$InstallerSource)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot
 foreach($file in @('convert.ps1','install.ps1')){
  $parseErrors=$null;[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo ('installer/windows/'+$file)),[ref]$null,[ref]$parseErrors)|Out-Null
  if($parseErrors){throw ($parseErrors|Out-String)}
 }
-$source=Get-Content (Join-Path $repo 'installer/windows/convert.ps1') -Raw
+$source=Get-Content $(if($InstallerSource){$InstallerSource}else{Join-Path $repo 'installer/windows/convert.ps1'}) -Raw
 $entry=(Get-Content (Join-Path $repo 'installer/windows/install.ps1') -Raw).Replace('#Requires -RunAsAdministrator','').Replace("& (Join-Path `$PSScriptRoot 'convert.ps1') @PSBoundParameters",'& ([scriptblock]::Create($script:conversionCode)) @PSBoundParameters')
 function Invoke-FakeAcl {$global:LASTEXITCODE=0}
-function Get-Acl {return @{fixture='private'}}
-function Set-Acl {}
-function Get-ScheduledTask {return [pscustomobject]@{State=$(if($script:scenario -eq 'inactive' -or $script:stopped){'Ready'}else{'Running'})}}
-function Stop-ScheduledTask {$script:stopped=$true}
+function Get-Acl {param([string]$LiteralPath) if(-not $script:acls.ContainsKey($LiteralPath)){$script:acls[$LiteralPath]=@{fixture='original-private';Sddl='original-private'}}; return $script:acls[$LiteralPath]}
+function Set-Acl {param([string]$LiteralPath,$AclObject) $script:acls[$LiteralPath]=$AclObject}
+function Get-ScheduledTask {if($script:scenario -eq 'stop-query-fail' -and $script:stopped){throw 'Fixture post-stop query failure'};return [pscustomobject]@{State=$(if($script:scenario -eq 'inactive' -or $script:stopped){'Ready'}else{'Running'})}}
+function Stop-ScheduledTask {$script:stopped=$true;if($script:scenario -eq 'stop-call-fail'){throw 'Fixture stop reported failure after stopping'}}
 function Start-ScheduledTask {$script:started=$true;$script:stopped=$false}
+function New-FixtureSecurity {
+ $acl=[pscustomobject]@{fixture='';Sddl=''};$acl|Add-Member -MemberType ScriptMethod -Name SetSecurityDescriptorSddlForm -Value {param($value) $this.fixture=$value;$this.Sddl=$value};return $acl
+}
 function Get-BootCatalog {param([switch]$FullScan) if(-not $FullScan){return @{systems=@()}};return @{systems=@(@{id='0002';name='Remote Boot iPXE'})}}
 function Get-Partition {return [pscustomobject]@{GptType='{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}';DiskNumber=0;PartitionNumber=1;Size=4096;Offset=512;Guid='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}}
 function Get-Disk {return @{LogicalSectorSize=512}}
@@ -22,6 +26,7 @@ function Move-Item {
  param([string]$LiteralPath,[string]$Destination,[switch]$Force)
  if($script:scenario -eq 'efi-fail' -and $LiteralPath -like '*ipxe.efi.new'){throw 'Fixture EFI write failure'}
  Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination -Force:$Force
+ if($script:acls.ContainsKey($LiteralPath)){$script:acls[$Destination]=$script:acls[$LiteralPath]}
 }
 function Read-Host {
     param($Prompt)
@@ -44,9 +49,10 @@ function Invoke-FakeAgent {
         $path=$args[[array]::IndexOf($args,'--config')+1]
         $c=Get-Content $path -Raw|ConvertFrom-Json
         foreach($k in @('blind_mode','mode_revision','device_id','public_key','fingerprint','discovery_version')){$c|Add-Member -NotePropertyName $k -NotePropertyValue $p.$k -Force}
-        $c.url='http://'+$p.last_ipv4;$c|ConvertTo-Json|Set-Content $path
+        $c.url='http://'+$p.last_ipv4;$temporary=$path+'.agent-save';$c|ConvertTo-Json|Set-Content $temporary;Move-Item -LiteralPath $temporary -Destination $path -Force;$script:acls[$path]=@{fixture='inherited';Sddl='inherited'}
+        if($script:scenario -eq 'atomic-apply-fail'){$global:LASTEXITCODE=6}
     }
-    if($args -contains '--report-preparation'){$script:reported=$true;if($script:scenario -eq 'stale'){$global:LASTEXITCODE=5}}
+    if($args -contains '--report-preparation'){$script:reported=$true;$path=$args[[array]::IndexOf($args,'--config')+1];$temporary=$path+'.agent-save';[IO.File]::WriteAllText($temporary,[IO.File]::ReadAllText($path));Move-Item -LiteralPath $temporary -Destination $path -Force;$script:acls[$path]=@{fixture='inherited';Sddl='inherited'};if($script:scenario -eq 'stale'){$global:LASTEXITCODE=5}}
 }
 Add-Type @'
 using System;
@@ -59,11 +65,12 @@ public static class FixtureFirmware {
 '@
 $key='04'+'6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296'+'4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5'
 $fingerprint=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Convert]::FromHexString($key))).ToLowerInvariant()
-foreach($scenario in @('success','normal','rerun','inactive','wrong-pc','wrong-mode','wrong-revision','wrong-device','wrong-pin','bad-hash','cancel-trust','cancel-install','apply-fail','efi-fail','stale')) {
+foreach($scenario in @('success','normal','rerun','inactive','wrong-pc','wrong-mode','wrong-revision','wrong-device','wrong-pin','bad-hash','cancel-trust','cancel-install','apply-fail','efi-fail','stale','atomic-apply-fail','stop-query-fail','stop-call-fail','rollback-staged-link','rollback-bad-backup','rollback-ancestor')) {
  $box=Join-Path ([IO.Path]::GetTempPath()) ('rb-convert-'+[guid]::NewGuid().ToString('N'))
+ if($Only -and $scenario -ne $Only){continue}
  New-Item -ItemType Directory $box|Out-Null
  try {
-  $script:scenario=$scenario;$script:stopped=$false;$script:started=$false;$script:applied=$false;$script:reported=$false
+  $script:acls=@{};$script:scenario=$scenario;$script:stopped=$false;$script:started=$false;$script:applied=$false;$script:reported=$false
   $base=Join-Path $box 'RemoteBoot';New-Item -ItemType Directory $base|Out-Null
   $config=Join-Path $base 'agent.json';$binary=Join-Path $base 'remote-boot-agent.exe'
   $old='{"protocol":2,"pc_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","agent_id":"cccccccccccccccccccccccccccccccc","token":"fixture-not-real","url":"http://192.168.1.20","allow_reboot":true,"allow_shutdown":false}'
@@ -90,6 +97,7 @@ foreach($scenario in @('success','normal','rerun','inactive','wrong-pc','wrong-m
   $code=$code.Replace('$root=Split-Path (Split-Path $PSScriptRoot)',('$root='''+$repo+''''))
   $code=$code.Replace('Join-Path $env:ProgramData ''RemoteBoot''',(''''+$base+''''))
   $code=$code.Replace('& icacls.exe','Invoke-FakeAcl').Replace('& $runner @Arguments','Invoke-FakeAgent @Arguments')
+  $code=$code.Replace('New-Object Security.AccessControl.FileSecurity','New-FixtureSecurity')
   $code=$code.Replace('$access="${letter}:\"','$access=$script:fixtureAccess')
   $script:conversionCode=$code
   $failed=$false
@@ -99,10 +107,12 @@ foreach($scenario in @('success','normal','rerun','inactive','wrong-pc','wrong-m
    if([IO.File]::ReadAllText($config) -cne $old -or [IO.File]::ReadAllText($binary) -cne 'old binary' -or [IO.File]::ReadAllText((Join-Path $efi 'ipxe.efi')) -cne 'old EFI' -or $script:applied -or $script:stopped){throw "Unsafe pre-confirmation change: $scenario"}
    if($failed -ne ($scenario -notlike 'cancel-*')){throw "Wrong validation result $scenario"}
   } else {
-   if($failed -ne ($scenario -in @('apply-fail','efi-fail','stale'))){throw "Unexpected outcome $scenario"}
+   if($failed -ne ($scenario -in @('apply-fail','efi-fail','stale','atomic-apply-fail','stop-query-fail','stop-call-fail'))){throw "Unexpected outcome $scenario"}
    $backup=(Get-ChildItem $base -Directory -Filter 'backup-*'|Select-Object -First 1).FullName
    if(-not $backup -or [IO.File]::ReadAllText((Join-Path $backup 'agent.json')) -cne $old){throw 'No credential backup'}
-   if($scenario -notin @('apply-fail','efi-fail')){
+   if((Get-Acl -LiteralPath $config).fixture -cne 'original-private'){throw "Config ACL lost after atomic rewrite: $scenario"}
+   if($scenario -in @('stop-query-fail','stop-call-fail') -and (-not $script:started -or $script:stopped)){throw "Running task not recovered after stop failure: $scenario"}
+   if($scenario -notin @('apply-fail','efi-fail','atomic-apply-fail','stop-query-fail','stop-call-fail')){
     $c=Get-Content $config -Raw|ConvertFrom-Json
     if($c.token -cne 'fixture-not-real' -or $c.agent_id -cne ('c'*32) -or -not $c.allow_reboot -or $c.allow_shutdown -or $c.blind_mode -ne $profile.blind_mode -or -not $script:reported){throw 'Credentials, permission or report mismatch'}
     if((Get-FileHash (Join-Path $efi 'ipxe.efi')).Hash -ine $hash){throw 'EFI was not installed'}
@@ -113,9 +123,22 @@ foreach($scenario in @('success','normal','rerun','inactive','wrong-pc','wrong-m
     $statePath=Join-Path $backup 'state.json';$saved=Get-Content $statePath -Raw;$state=$saved|ConvertFrom-Json;$state.partition_guid='ffffffff-ffff-ffff-ffff-ffffffffffff';$state|ConvertTo-Json|Set-Content $statePath
     $rejected=$false;try {& ([scriptblock]::Create($entry)) -Rollback $backup} catch {$rejected=$true}
     if(-not $rejected -or (Get-FileHash (Join-Path $efi 'ipxe.efi')).Hash -ine $hash){throw 'Rollback wrote to wrong partition'}
-    Set-Content $statePath $saved
+    [IO.File]::WriteAllText($statePath,$saved)
    }
-   & ([scriptblock]::Create($entry)) -Rollback $backup
+   $sentinel=Join-Path $box 'unrelated.txt';[IO.File]::WriteAllText($sentinel,'untouched')
+   if($scenario -eq 'rollback-staged-link'){foreach($destination in @($config,$binary,(Join-Path $efi 'ipxe.efi'),(Join-Path $efi 'manifest.json'))){New-Item -ItemType SymbolicLink -Path ($destination+'.restore') -Target $sentinel|Out-Null}}
+   if($scenario -in @('rollback-bad-backup','rollback-ancestor')){
+    $before=[IO.File]::ReadAllText($config);$backupBinary=Join-Path $backup 'agent.bin';$savedBinary=[IO.File]::ReadAllText($backupBinary)
+    if($scenario -eq 'rollback-bad-backup'){[IO.File]::WriteAllText($backupBinary,'corrupted')}
+    if($scenario -eq 'rollback-ancestor'){Rename-Item -LiteralPath $efi -NewName 'iPXE-original';New-Item -ItemType SymbolicLink -Path $efi -Target ($efi+'-original')|Out-Null}
+    $rejected=$false;try {& ([scriptblock]::Create($entry)) -Rollback $backup} catch {$rejected=$true}
+    if(-not $rejected -or [IO.File]::ReadAllText($config) -cne $before){throw "Unsafe rollback before validation: $scenario"}
+    if($scenario -eq 'rollback-ancestor'){Remove-Item -LiteralPath $efi;Rename-Item -LiteralPath ($efi+'-original') -NewName 'iPXE'}
+    [IO.File]::WriteAllText($backupBinary,$savedBinary)
+   }
+   $savedScenario=$script:scenario;$script:scenario='success'
+   try {& ([scriptblock]::Create($entry)) -Rollback $backup} finally {$script:scenario=$savedScenario}
+   if([IO.File]::ReadAllText($sentinel) -cne 'untouched' -or ((Get-Item -LiteralPath $config).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Rollback followed a preexisting staging symlink'}
    if([IO.File]::ReadAllText($config) -cne $old -or [IO.File]::ReadAllText($binary) -cne 'old binary' -or [IO.File]::ReadAllText((Join-Path $efi 'ipxe.efi')) -cne 'old EFI' -or [IO.File]::ReadAllText((Join-Path $efi 'manifest.json')) -cne 'old manifest'){throw 'Rollback did not restore original files'}
   }
   Write-Host "PASS Windows conversion: $scenario"

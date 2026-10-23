@@ -22,19 +22,10 @@ done
 # Only the selected files are restored; firmware BootOrder/BootNext and other entries
 # are never imported from a snapshot. Snapshot files are for inspection only.
 restore_files() {
-    local b=$1 c bin target item mount uuid
-    c=$(jq -er '.config' "$b/state.json"); bin=$(jq -er '.binary' "$b/state.json")
+    local b=$1 mount uuid
     mount=$(jq -er '.esp_mount' "$b/state.json"); uuid=$(jq -er '.partuuid' "$b/state.json")
     [[ $(findmnt -rn -M "$mount" -o FSTYPE) == vfat && $(lsblk -dnro PARTUUID "$(findmnt -rn -M "$mount" -o SOURCE)") == "$uuid" ]] || { echo 'Original ESP identity unavailable; refusing rollback.' >&2; return 1; }
-    target=$(jq -er '.target' "$b/state.json")
-    [[ -d $(dirname -- "$target") && ! -L $c && ! -L $bin ]] || { echo 'Rollback paths unavailable or symlinked; mount the original ESP first.' >&2; return 1; }
-    cp -p -- "$b/agent.json" "$c.restore"; chmod "$(jq -r '.config_mode' "$b/state.json")" "$c.restore"; mv -f -- "$c.restore" "$c"
-    cp -p -- "$b/agent.bin" "$bin.restore"; chmod "$(jq -r '.binary_mode' "$b/state.json")" "$bin.restore"; mv -f -- "$bin.restore" "$bin"
-    for item in ipxe.efi manifest.json; do
-        if [[ -f $b/$item ]]; then cp -p -- "$b/$item" "$target/$item.restore"; mv -f -- "$target/$item.restore" "$target/$item";
-        else rm -f -- "$target/$item"; fi
-        rm -f -- "$target/$item.new"
-    done
+    python3 "$root/installer/linux/recovery.py" restore "$b"
     # A newly created entry can only be removed if it is unchanged and unreferenced.
     if [[ -f $b/created-entry ]]; then
         local id current order next
@@ -49,6 +40,7 @@ restore_files() {
 }
 if [[ -n $restore ]]; then
     [[ -f $restore/state.json && -f $restore/agent.json && -f $restore/agent.bin ]] || { echo 'Incomplete conversion backup' >&2; exit 1; }
+    python3 "$root/installer/linux/recovery.py" check "$restore"
     echo "Restore only this OS agent and selected EFI files from $restore. BootOrder/BootNext remain untouched."
     read -r -p 'Type RESTORE to roll back: ' answer
     [[ $answer == RESTORE ]] || { echo 'Rollback cancelled.'; exit 0; }
@@ -95,6 +87,7 @@ mapfile -t ids < <(efibootmgr | rb_remote_boot_ids)
 (( ${#ids[@]} <= 1 )) || { echo 'Multiple Remote Boot entries; resolve explicitly first.' >&2; exit 1; }
 existing=${ids[0]:-}
 target="$esp_mount/EFI/iPXE"
+for destination in "$config" "$binary" "$target"; do python3 "$root/installer/linux/recovery.py" pathcheck "$destination"; done
 printf 'Will update paired agent %s and %s on %s partition %s.\n' "$config" "$target" "$disk" "$part"
 read -r -p 'Type INSTALL to write agent configuration and EFI: ' answer
 [[ $answer == INSTALL ]] || { echo 'Conversion cancelled; no files changed.'; exit 0; }
@@ -112,10 +105,12 @@ for item in ipxe.efi manifest.json; do [[ ! -f $target/$item ]] || cp -p -- "$ta
 efibootmgr -v > "$backup/efibootmgr.txt"
 old_order=$(efibootmgr | sed -n 's/^BootOrder: //p'); [[ $old_order =~ ^[0-9A-Fa-f,]+$ ]] || { echo 'Cannot read BootOrder' >&2; exit 1; }
 jq -n --arg config "$config" --arg binary "$binary" --arg target "$target" --arg mount "$esp_mount" --arg uuid "$partuuid" --arg cm "$(stat -c %a "$config")" --arg bm "$(stat -c %a "$binary")" '{config:$config,binary:$binary,target:$target,esp_mount:$mount,partuuid:$uuid,config_mode:$cm,binary_mode:$bm}' > "$backup/state.json"
+python3 "$root/installer/linux/recovery.py" seal "$backup"
 phase='agent configuration'; active=false
 finish() {
     local rc=$?
     trap - EXIT
+    python3 "$root/installer/linux/recovery.py" metadata "$backup" || rc=1
     if $active; then systemctl start remote-boot.service || rc=1; fi
     if ((rc)); then printf 'Conversion incomplete at phase: %s. Local preparation pending. Backup: %s\nRollback: bash %q --rollback %q\n' "$phase" "$backup" "$root/installer/linux/install.sh" "$backup" >&2; fi
     exit "$rc"
@@ -125,6 +120,7 @@ printf 'Backup: %s\n' "$backup"
 if systemctl is-active --quiet remote-boot.service; then active=true; systemctl stop remote-boot.service; fi
 # Use the owned installed config, preserving PC/agent IDs, token and permissions.
 "$runner" --apply-profile "$profile" --config "$config" --confirm-fingerprint "$fingerprint" || { echo 'Agent profile application failed. Older agents require --agent-file with a current native binary.' >&2; exit 1; }
+python3 "$root/installer/linux/recovery.py" metadata "$backup"
 if [[ -n $candidate ]]; then
     phase='agent binary upgrade'; cp -- "$candidate" "$binary.new"; chmod "$(jq -r '.binary_mode' "$backup/state.json")" "$binary.new"; mv -f -- "$binary.new" "$binary"
 fi
@@ -140,11 +136,13 @@ if [[ -z $existing ]]; then
     existing=${ids[0]}
     jq --arg id "$existing" '.created_id=$id' "$backup/state.json" > "$backup/state.new"; mv "$backup/state.new" "$backup/state.json"
     efibootmgr -v | sed -n "/^Boot$existing/p" > "$backup/created-entry"
+    python3 "$root/installer/linux/recovery.py" seal "$backup"
 fi
 [[ $(efibootmgr | sed -n 's/^BootOrder: //p') == "$old_order" ]] || { echo 'Unexpected BootOrder change. Retained snapshot; no global restore was attempted.' >&2; exit 1; }
 if $active; then systemctl start remote-boot.service; active=false; fi
 phase='server preparation report'
 "$binary" --report-preparation "$target/manifest.json" --config "$config" || { echo 'EFI installed, but server preparation is pending (possibly stale desired mode/revision). Export a fresh profile and rerun, or explicitly roll back.' >&2; exit 1; }
+python3 "$root/installer/linux/recovery.py" metadata "$backup"
 echo 'Local preparation reported; this is not proof of physical boot. Other OS agents may still need conversion.'
 phase='optional BootNext test'
 read -r -p 'Set BootNext for one-time test? Type TEST: ' answer || answer=''

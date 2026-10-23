@@ -60,19 +60,77 @@ function Protect-RbBackup([string]$Path) {
     & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'|Out-Null
     if($LASTEXITCODE -ne 0){throw 'Cannot protect backup directory'}
 }
-function Restore-RbFiles([string]$Backup) {
-    $state=Get-Content -LiteralPath (Join-Path $Backup 'state.json') -Raw|ConvertFrom-Json
-    foreach($file in @(@('agent.json',$state.config),@('agent.bin',$state.binary))){
-        Copy-Item -LiteralPath (Join-Path $Backup $file[0]) -Destination ($file[1]+'.restore') -Force
-        Move-Item -LiteralPath ($file[1]+'.restore') -Destination $file[1] -Force
+function Assert-RbSafePath([string]$Path) {
+    if(-not [IO.Path]::IsPathRooted($Path) -or '..' -in ($Path -split '[\\/]')){throw 'Recovery paths must be absolute without parent traversal'}
+    $current=[IO.Path]::GetFullPath($Path)
+    while($current){
+        $entry=Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+        if($null -ne $entry -and ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw "Unsafe reparse destination or ancestor: $current"}
+        $parent=[IO.Directory]::GetParent($current)
+        $current=if($null -eq $parent){$null}else{$parent.FullName}
     }
-    $acl=Import-Clixml -LiteralPath (Join-Path $Backup 'config-acl.xml');Set-Acl -LiteralPath $state.config -AclObject $acl
-    $acl=Import-Clixml -LiteralPath (Join-Path $Backup 'binary-acl.xml');Set-Acl -LiteralPath $state.binary -AclObject $acl
+}
+function Write-RbSnapshotSeal([string]$Backup) {
+    $inventory=@{}
+    foreach($name in @('state.json','agent.json','agent.bin','config-acl.xml','binary-acl.xml','ipxe.efi','manifest.json')){
+        $path=Join-Path $Backup $name;Assert-RbSafePath $path
+        $inventory[$name]=if(Test-Path -LiteralPath $path -PathType Leaf){(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}else{$null}
+    }
+    $inventory|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $Backup 'integrity.json')
+}
+function Test-RbSnapshot([string]$Backup) {
+    Assert-RbSafePath $Backup
+    $seal=Join-Path $Backup 'integrity.json';Assert-RbSafePath $seal
+    $inventory=Get-Content -LiteralPath $seal -Raw|ConvertFrom-Json
+    $names=@('state.json','agent.json','agent.bin','config-acl.xml','binary-acl.xml','ipxe.efi','manifest.json')
+    if(@($inventory.PSObject.Properties.Name).Count -ne $names.Count -or @($inventory.PSObject.Properties.Name|Where-Object {$_ -cnotin $names}).Count){throw 'Incomplete backup integrity inventory'}
+    foreach($required in @('state.json','agent.json','agent.bin','config-acl.xml','binary-acl.xml')){if(-not (Get-RbField $inventory $required)){throw "Required original missing from inventory: $required"}}
+    foreach($name in $names){
+        $path=Join-Path $Backup $name;Assert-RbSafePath $path;$expected=Get-RbField $inventory $name
+        if($expected){if(-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $expected){throw "Backup integrity mismatch: $name"}}
+        elseif(Test-Path -LiteralPath $path){throw "Backup presence mismatch: $name"}
+    }
+}
+function Copy-RbRecoveryFile([string]$Source,[string]$Destination,$Acl=$null) {
+    Assert-RbSafePath $Source;Assert-RbSafePath $Destination
+    $stage=Join-Path (Split-Path $Destination -Parent) ('.rb-restore-'+[guid]::NewGuid().ToString('N'))
+    # CreateNew fails rather than following an existing staging file/reparse point.
+    try {
+        $output=[IO.File]::Open($stage,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        try {
+            $input=[IO.File]::OpenRead($Source)
+            try {$input.CopyTo($output);$output.Flush($true)} finally {$input.Dispose()}
+        } finally {$output.Dispose()}
+        if($null -ne $Acl){Set-Acl -LiteralPath $stage -AclObject $Acl}
+        Assert-RbSafePath $Destination
+        Move-Item -LiteralPath $stage -Destination $Destination -Force
+    } finally {if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Force}}
+
+}
+function Restore-RbConfigAcl {
+    if($null -ne $script:originalConfigAcl){Assert-RbSafePath $AgentConfig;Set-Acl -LiteralPath $AgentConfig -AclObject $script:originalConfigAcl}
+}
+function Import-RbAcl([string]$Path) {
+    $saved=Import-Clixml -LiteralPath $Path
+    if($saved -is [Security.AccessControl.FileSystemSecurity]){return $saved}
+    # CLIXML may deserialize FileSecurity as a property bag; rebuild its descriptor.
+    $acl=New-Object Security.AccessControl.FileSecurity
+    $acl.SetSecurityDescriptorSddlForm([string]$saved.Sddl)
+    return $acl
+}
+function Restore-RbFiles([string]$Backup) {
+    Test-RbSnapshot $Backup
+    $state=Get-Content -LiteralPath (Join-Path $Backup 'state.json') -Raw|ConvertFrom-Json
+    # Validate every destination and deserialize every ACL before restoring any file.
+    foreach($path in @($state.config,$state.binary,$script:restoreTarget,(Join-Path $script:restoreTarget 'ipxe.efi'),(Join-Path $script:restoreTarget 'manifest.json'))){Assert-RbSafePath $path}
+    $configAcl=Import-RbAcl (Join-Path $Backup 'config-acl.xml')
+    $binaryAcl=Import-RbAcl (Join-Path $Backup 'binary-acl.xml')
+    Copy-RbRecoveryFile (Join-Path $Backup 'agent.json') $state.config $configAcl
+    Copy-RbRecoveryFile (Join-Path $Backup 'agent.bin') $state.binary $binaryAcl
     foreach($name in @('ipxe.efi','manifest.json')){
         $destination=Join-Path $script:restoreTarget $name;$original=Join-Path $Backup $name
-        if(Test-Path -LiteralPath $original){Copy-Item -LiteralPath $original -Destination "$destination.restore" -Force;Move-Item -LiteralPath "$destination.restore" -Destination $destination -Force}
+        if(Test-Path -LiteralPath $original){Copy-RbRecoveryFile $original $destination}
         elseif(Test-Path -LiteralPath $destination){Remove-Item -LiteralPath $destination -Force}
-        if(Test-Path -LiteralPath "$destination.new"){Remove-Item -LiteralPath "$destination.new" -Force}
     }
     $created=Get-RbField $state 'created_id'
     if($created){
@@ -92,6 +150,7 @@ function Invoke-RbMounted([int]$DiskNumber,[int]$PartitionNumber,[scriptblock]$A
     try {& $Action $access} finally {Remove-PartitionAccessPath -DiskNumber $DiskNumber -PartitionNumber $PartitionNumber -AccessPath $access}
 }
 if($Rollback){
+    Test-RbSnapshot $Rollback
     $state=Get-Content -LiteralPath (Join-Path $Rollback 'state.json') -Raw|ConvertFrom-Json
     $partition=Get-Partition|Where-Object {$_.DiskNumber -eq $state.disk -and $_.PartitionNumber -eq $state.partition -and [string]$_.Guid -eq $state.partition_guid -and $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'}
     if($null -eq $partition){throw 'Original GPT ESP identity unavailable; refusing rollback.'}
@@ -112,6 +171,7 @@ Write-Host "ESP fingerprint: $($profile.fingerprint)"
 Write-Host "PC $($profile.pc_id); desired blind_mode=$($profile.blind_mode); mode revision=$($profile.mode_revision); normal IPv4=$($profile.last_ipv4)"
 Write-Host 'Compare the fingerprint with a previously trusted source or physical USB. Convert each OS agent separately in dual boot.'
 if((Read-Host 'Type TRUST to confirm fingerprint and desired mode') -cne 'TRUST'){Write-Host 'Conversion cancelled; no files changed.';return}
+Assert-RbSafePath $AgentConfig;Assert-RbSafePath $binary
 if(-not (Test-Path -LiteralPath $AgentConfig -PathType Leaf) -or -not (Test-Path -LiteralPath $binary -PathType Leaf)){throw 'Existing paired agent config and installed binary are required.'}
 $identity=Get-Content -LiteralPath $AgentConfig -Raw|ConvertFrom-Json
 if($identity.protocol -ne 2 -or $identity.pc_id -cne $profile.pc_id){throw 'Profile belongs to another paired PC'}
@@ -160,7 +220,8 @@ New-Item -ItemType Directory -Path $backup -Force|Out-Null
 Protect-RbBackup $backup
 Copy-Item -LiteralPath $AgentConfig -Destination (Join-Path $backup 'agent.json')
 Copy-Item -LiteralPath $binary -Destination (Join-Path $backup 'agent.bin')
-Get-Acl -LiteralPath $AgentConfig|Export-Clixml -LiteralPath (Join-Path $backup 'config-acl.xml')
+$script:originalConfigAcl=Get-Acl -LiteralPath $AgentConfig
+$script:originalConfigAcl|Export-Clixml -LiteralPath (Join-Path $backup 'config-acl.xml')
 Get-Acl -LiteralPath $binary|Export-Clixml -LiteralPath (Join-Path $backup 'binary-acl.xml')
 Copy-Item -LiteralPath $DiscoveryProfile -Destination (Join-Path $backup 'profile.json')
 Copy-Item -LiteralPath $ManifestFile -Destination (Join-Path $backup 'new-manifest.json')
@@ -173,12 +234,12 @@ Write-Host "Backup: $backup"
 try {
     Invoke-RbMounted $diskNumber $partitionNumber {
         param($access)
-        $target=Join-Path $access 'EFI\iPXE';New-Item -ItemType Directory -Path $target -Force|Out-Null
+        $target=Join-Path $access 'EFI\iPXE';Assert-RbSafePath $target;New-Item -ItemType Directory -Path $target -Force|Out-Null
         foreach($name in @('ipxe.efi','manifest.json')){if(Test-Path -LiteralPath (Join-Path $target $name)){Copy-Item -LiteralPath (Join-Path $target $name) -Destination (Join-Path $backup $name)}}
-        $state.snapshot_complete=$true;$state|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $backup 'state.json')
-        if($running){Stop-RbTask;$script:taskStopped=$true}
+        $state.snapshot_complete=$true;$state|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $backup 'state.json');Write-RbSnapshotSeal $backup
+        if($running){$script:taskStopped=$true;Stop-RbTask}
         $script:phase='agent configuration'
-        Invoke-RbAgent $runner @('--apply-profile',$DiscoveryProfile,'--config',$AgentConfig,'--confirm-fingerprint',$profile.fingerprint)
+        try {Invoke-RbAgent $runner @('--apply-profile',$DiscoveryProfile,'--config',$AgentConfig,'--confirm-fingerprint',$profile.fingerprint)} finally {Restore-RbConfigAcl}
         if($AgentFile){
             $script:phase='agent binary upgrade';$acl=Get-Acl -LiteralPath $binary
             Copy-Item -LiteralPath $AgentFile -Destination "$binary.new" -Force;Set-Acl -LiteralPath "$binary.new" -AclObject $acl
@@ -193,12 +254,13 @@ try {
             for($i=0;$i -le 65535;$i++){if($null -eq [Firmware]::Read(('Boot{0:X4}' -f $i))){$id=('{0:X4}' -f $i);break}}
             if(-not $id){throw 'No unused Boot#### entry'}
             $state.created_id=$id;$state.created_bytes=[Convert]::ToBase64String($entryBytes);$state|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $backup 'state.json')
+            Write-RbSnapshotSeal $backup
             [Firmware]::Write("Boot$id",$entryBytes)
         }
         if([Convert]::ToBase64String([Firmware]::Read('BootOrder')) -cne [Convert]::ToBase64String($oldOrder)){throw 'Unexpected BootOrder change; retained snapshot, no global restore attempted'}
         if($script:taskStopped){Start-ScheduledTask -TaskName RemoteBootAgent;$script:taskStopped=$false}
         $script:phase='server preparation report'
-        Invoke-RbAgent $binary @('--report-preparation',$manifestTarget,'--config',$AgentConfig)
+        try {Invoke-RbAgent $binary @('--report-preparation',$manifestTarget,'--config',$AgentConfig)} finally {Restore-RbConfigAcl}
         Write-Host 'Local preparation reported. This is not proof of physical boot; other OS agents may still need conversion.'
         $script:phase='optional BootNext test'
         if((Read-Host 'Type TEST to set BootNext for a one-time test') -ceq 'TEST'){[Firmware]::Write('BootNext',[BitConverter]::GetBytes([Convert]::ToUInt16($id,16)))}
@@ -206,4 +268,4 @@ try {
     }
 } catch {
     throw "Conversion incomplete at phase $script:phase. Local preparation pending (server may reject stale mode/revision). Backup: $backup. Rerun with a fresh profile or explicitly restore using install.ps1 -Rollback '$backup'. Cause: $_"
-} finally {if($script:taskStopped){Start-ScheduledTask -TaskName RemoteBootAgent}}
+} finally {try {Restore-RbConfigAcl} finally {if($script:taskStopped){Start-ScheduledTask -TaskName RemoteBootAgent}}}
