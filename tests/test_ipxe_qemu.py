@@ -190,11 +190,14 @@ class QemuDiscovery(unittest.TestCase):
               '-drive','if=pflash,format=raw,readonly=on,file='+os.environ['OVMF_CODE'],'-drive','if=pflash,format=raw,file='+str(varsfile),
               '-drive','format=raw,file=fat:rw:'+str(disk),'-netdev','socket,id=n,connect=127.0.0.1:'+str(lan.port),'-device','e1000,netdev=n,romfile=']
         proc=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        completed_at=None
         try:
             deadline=time.monotonic()+35
             while time.monotonic()<deadline and proc.poll() is None:
                 log=serial.read_text(errors='replace') if serial.exists() else ''
-                if 'RBDISCOVER_QEMU_CONTINUATION' in log or 'Remote Boot discovery or loader failure' in log:break
+                if 'RBDISCOVER_QEMU_CONTINUATION' in log or 'Remote Boot discovery or loader failure' in log:
+                    completed_at=time.monotonic()
+                    break
                 time.sleep(.1)
         finally:
             proc.terminate()
@@ -202,7 +205,8 @@ class QemuDiscovery(unittest.TestCase):
             except subprocess.TimeoutExpired:proc.kill();stdout,stderr=proc.communicate()
             lan.close()
         (self.logroot/(mode+'-qemu.log')).write_bytes(stdout+stderr)
-        details={'frames':lan.frames,'queries':lan.queries,'mdns':lan.mdns,'http':[x.decode(errors='replace') for x in lan.http],'error':str(lan.error)}
+        completion_elapsed=(completed_at-lan.queries[0][0]) if completed_at is not None and lan.queries else None
+        details={'completion_elapsed_s':completion_elapsed,'frames':lan.frames,'queries':lan.queries,'mdns':lan.mdns,'http':[x.decode(errors='replace') for x in lan.http],'error':str(lan.error)}
         (self.logroot/(mode+'-network.json')).write_text(json.dumps(details,indent=2))
         log=serial.read_text(errors='replace')
         self.assertIsNone(lan.error,details)
@@ -215,6 +219,11 @@ class QemuDiscovery(unittest.TestCase):
         else:
             self.assertFalse(lan.http,details)
             self.assertIn('Remote Boot discovery or loader failure',log)
+            self.assertIsNotNone(completion_elapsed,details)
+            # Measure command completion, not merely when retries stop. The
+            # serial observer adds at most one100ms polling interval.
+            self.assertGreaterEqual(completion_elapsed,2.8,details)
+            self.assertLess(completion_elapsed,3.5,details)
         self.assertLess(lan.queries[-1][0]-lan.queries[0][0],3.5)
         if mode.startswith('mdns'):self.assertGreater(lan.mdns,0)
         if mode=='invalid-first':self.assertGreater(lan.queries[-1][0]-lan.queries[0][0],.4)

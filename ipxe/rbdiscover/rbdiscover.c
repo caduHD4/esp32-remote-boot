@@ -375,6 +375,10 @@ static int rbdiscover_deliver ( struct rbdiscover *rb, struct io_buffer *iobuf,
 		goto ignore;
 	if ( rbdiscover_verify ( reply ) != 0 )
 		goto ignore;
+	/* Verification is synchronous: the absolute deadline may have elapsed
+	 * while checking a valid signature. Never publish a late endpoint. */
+	if ( ( long ) ( currticks() - rb->deadline ) >= 0 )
+		goto ignore;
 	rc = rbdiscover_store ( reply + 40 );
 	rbdiscover_close ( rb, rc );
 	free_iob ( iobuf );
