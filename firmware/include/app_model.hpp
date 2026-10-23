@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
-#include <WebServer.h>
+#include "bounded_web_server.hpp"
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <WebSocketsServer.h>
@@ -20,7 +20,7 @@
 #include "web_asset.h"
 
 constexpr char Version[]="3.0.0-alpha.1";
-WebServer server(80); WiFiUDP udp; Preferences nvs; rb::ConfigStore store(nvs);
+rb::BoundedWebServer server(80); WiFiUDP udp; Preferences nvs; rb::ConfigStore store(nvs);
 WebSocketsServer agentSocket(81); JsonDocument config;
 rb::DiscoveryRuntime discovery;
 rb::MicrolinkRuntime microlink;rb::WiFiReconnectPolicy wifiReconnect;

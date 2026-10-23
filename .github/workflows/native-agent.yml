@@ -34,14 +34,28 @@ jobs:
         run: |
           & "./build/agent/${{ matrix.rid }}/${{ matrix.executable }}" --self-test
           if ($LASTEXITCODE -ne 0) { throw 'Native tests failed' }
+          $standalone = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory $standalone | Out-Null
+          try {
+            Copy-Item "./build/agent/${{ matrix.rid }}/${{ matrix.executable }}" $standalone
+            Push-Location $standalone
+            try {
+              & "./${{ matrix.executable }}" --self-test
+              if ($LASTEXITCODE -ne 0) { throw 'Standalone native tests failed' }
+            } finally { Pop-Location }
+          } finally { Remove-Item -Recurse -Force $standalone }
           Get-FileHash "./build/agent/${{ matrix.rid }}/${{ matrix.executable }}" -Algorithm SHA256 | Format-List | Out-File "./build/agent/${{ matrix.rid }}/SHA256.txt"
       - name: Linux installer fixtures
         if: runner.os == 'Linux'
-        run: python3 agent/native/tests/installer-fixtures.py
+        run: |
+          python3 agent/native/tests/installer-fixtures.py
+          python3 tests/test_conversion_installers.py
       - name: Windows installer fixtures
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./agent/native/tests/installer-fixtures.ps1
+        run: |
+          ./agent/native/tests/installer-fixtures.ps1
+          ./tests/test_conversion_installers.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.rid }}

@@ -21,8 +21,8 @@ public static class DiscoverySelfTest {
         return profile;
     }
     static void Fixture() {
-        string path=Path.Combine(AppContext.BaseDirectory,"discovery-v1.json");
-        using var document=JsonDocument.Parse(File.ReadAllText(path));var root=document.RootElement;var profile=ProfileFromFixture(root);
+        using var fixtureStream=typeof(DiscoverySelfTest).Assembly.GetManifestResourceStream("RemoteBoot.DiscoveryFixture") ?? throw new Exception("Embedded discovery fixture missing");
+        using var document=JsonDocument.Parse(fixtureStream);var root=document.RootElement;var profile=ProfileFromFixture(root);
         var nonce=DiscoveryProtocol.HexBytes(root.GetProperty("nonce_hex").GetString());
         var reply=DiscoveryProtocol.HexBytes(root.GetProperty("reply_hex").GetString());
         var source=new IPEndPoint(IPAddress.Parse(root.GetProperty("source_ipv4").GetString()),DiscoveryProtocol.Port);
@@ -154,8 +154,18 @@ public static class DiscoverySelfTest {
             DiscoveryRuntime.ReportPreparation(manifestPath,configPath,CancellationToken.None).GetAwaiter().GetResult();server.GetAwaiter().GetResult();key.Dispose();
         } finally {Directory.Delete(directory,true);}
     }
+    static void DnsDeadline() {
+        var (key,pub)=Key();using(key) {
+            var profile=LoopbackProfile(pub);profile.Hostname="remote-boot-"+profile.DeviceId.Substring(20)+".local";
+            int calls=0;var pending=new System.Threading.Tasks.TaskCompletionSource<IPAddress[]>();
+            var client=new DiscoveryClient(true,new[]{new IPEndPoint(IPAddress.Loopback,DiscoveryProtocol.Port)},(host,token)=>{calls++;return pending.Task;});
+            var timer=System.Diagnostics.Stopwatch.StartNew();
+            var replies=client.Discover(profile,100,CancellationToken.None);
+            Assert(replies.Count==0&&calls==1&&timer.ElapsedMilliseconds<1500,"stalled DNS escaped discovery deadline");
+        }
+    }
     public static int Run() {
-        Fixture();Configuration();Network();BlindEndpoint();ApplyProfileNormal();Preparation();
+        Fixture();Configuration();DnsDeadline();Network();BlindEndpoint();ApplyProfileNormal();Preparation();
         Console.WriteLine("PASS: shared signed discovery fixture, profile/config pinning, legacy compatibility, atomic config, loopback/production-LAN UDP success/wrong-key/timeout, blind endpoint persistence, normal profile apply and authenticated preparation report");
         return 0;
     }

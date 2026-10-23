@@ -124,7 +124,7 @@ void preparationReport(){
 }
 void routes() {
     const char* headers[]={"Authorization","If-None-Match","X-Agent-Session"};server.collectHeaders(headers,3);
-    server.on("/",HTTP_GET,[]{String etag=String('"')+webAssetEtag+'"';server.sendHeader("ETag",etag);server.sendHeader("Cache-Control","no-cache");if(server.header("If-None-Match")==etag){server.send(304);return;}server.sendHeader("Content-Encoding","gzip");server.send_P(200,"text/html",reinterpret_cast<const char*>(webAsset),sizeof webAsset);});
+    server.on("/",HTTP_GET,[]{String etag=String('"')+webAssetEtag+'"';server.sendHeader("ETag",etag);server.sendHeader("Cache-Control","no-cache");if(server.header("If-None-Match")==etag){server.send(304);return;}server.sendHeader("Content-Encoding","gzip");if(!server.sendBoundedAsset(200,"text/html",webAsset,sizeof webAsset))logEvent("HTTP_ASSET_ABORTED");});
     server.on("/api/v2/setup",HTTP_GET,[]{JsonDocument reply;reply["required"]=setupMode&&!locked;reply["config_locked"]=locked;jsonReply(200,reply);});
     server.on("/api/v2/setup",HTTP_POST,[]{
         if(!setupMode||locked){errorReply(409,"SETUP_CLOSED");return;}JsonDocument input;ConfigTransaction next;if(!body(input))return;

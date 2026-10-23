@@ -19,11 +19,13 @@ Status: DONE_WITH_CONCERNS (software/synthetic verification plus real ESP discov
 - `dotnet publish agent/native/RemoteBoot.Agent.csproj -c Release -r linux-x64 -o /tmp/rb-agent-publish`: PASS; published NativeAOT `--self-test`: PASS.
 - `dotnet run -- --discover --timeout-ms 200`: prints `[]`, exit 0.
 - Real ESP after application-only upload: pinned `--discover --profile` returned device `df72cc31...` with valid signature/source/IPv4; `--resolve` printed `10.0.1.10`; stale-cache profile (`10.0.1.99`) recovered via mDNS hostname `remote-boot-833acadf6957.local`; `--apply-profile` persisted `url=http://10.0.1.10/`, `blind_mode=true`, pin/revision and preserved the token; discovery identity was generated on the ESP (`Discovery device ID: df72cc31...`).
-- This bench AP did not deliver UDP broadcast to the ESP (unbound discovery returned `[]`), but unicast/mDNS pinned discovery worked. The firmware sets `SO_BROADCAST`; limitation is AP/bridge behavior, recorded for Task 3/physical acceptance.
+- Unbound discovery returned `[]` on this host, while unicast/mDNS pinned discovery worked. The firmware sets `SO_BROADCAST`; AP/bridge versus host-network cause remains unproven.
 - `git diff --check`: PASS.
 
 ## Limits / handoff
 
-- No Windows runtime, DHCP IP change (only stale-cache mDNS/unicast), hardware NVS endurance or EFI write was tested. The current AP blocks UDP broadcast, so the unbound local finder cannot enumerate the ESP there; profile/cached-IP and mDNS paths work. iPXE has no mDNS fallback and still needs broadcast-capable LAN or a cached IP.
+- No Windows runtime, DHCP IP change (only stale-cache mDNS/unicast), hardware NVS endurance or EFI write was tested. The unbound finder did not enumerate the ESP on this host; the cause remains unproven. Profile/cached-IP and mDNS paths work. Task3 subsequently implemented and QEMU-verified iPXE mDNS candidate fallback with pinned signed proof.
 - The shared fixture proves exact wire interoperability; loopback/LAN responders are synthetic.
 - Task 3 iPXE and Task 4 installers remain; Task 5 dashboard is implemented separately. Firmware was backed up, uploaded application-only, and hash-verified; full NVS changed only by the new discovery identity/allocations (Wi-Fi and MicroLink peer keys survived).
+
+Final integration embeds the public fixture for single-binary delivery and replaces synchronous DNS with one asynchronous lookup inside a monotonic deadline. Linux standalone self-test, stalled-DNS regression and real stale-cache resolution passed.

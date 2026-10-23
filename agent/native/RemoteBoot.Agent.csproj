@@ -13,5 +13,5 @@
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
   <ItemGroup><Compile Include="../windows/Firmware.cs" Link="Firmware.cs" /></ItemGroup>
-  <ItemGroup><None Include="../../tests/fixtures/discovery-v1.json" Link="discovery-v1.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../../tests/fixtures/discovery-v1.json" LogicalName="RemoteBoot.DiscoveryFixture" /></ItemGroup>
 </Project>

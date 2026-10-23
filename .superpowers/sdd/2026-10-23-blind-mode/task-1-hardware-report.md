@@ -24,10 +24,24 @@ Date: 2026-10-23. Board: ESP32-C3 AZ (QFN32) rev v1.1, 4 MB XMC flash, MAC `44:b
 - `--resolve --profile`: printed `10.0.1.10`.
 - Stale-cache test: profile `last_ipv4` changed to `10.0.1.99`; discovery recovered the real address through the mDNS hostname `remote-boot-833acadf6957.local`, then verified the signed reply.
 - `--apply-profile`: persisted `url=http://10.0.1.10/`, `blind_mode=true`, revision/pin/discovery metadata, and preserved the agent token.
-- The bench AP did not deliver UDP broadcast to the ESP, so unbound discovery (`--discover` without profile) returned `[]`; unicast and mDNS pinned discovery worked. Firmware sets `SO_BROADCAST`; this is recorded as an AP/bridge limitation.
+- Unbound discovery (`--discover` without profile) returned `[]` on this host; unicast and mDNS pinned discovery worked. Firmware sets `SO_BROADCAST`. No broadcast reply was observed; an AP/bridge cause has not been established and host firewall/network behavior remains possible.
 
 ## HTTP/dashboard smoke
 
 - Small unauthenticated endpoints work (`/api/v2/status` returns `401 AUTH_REQUIRED` JSON).
 - The large gzip dashboard asset repeatedly stalled partway (4,320 of 22,381 bytes) under the MicroLink build; the full browser/dashboard smoke could not be completed over this link. The dashboard UI/profile export were verified by the JS structure/value tests and the embedded-asset test, not by a full browser session against this firmware.
 - No EFI write, OS power action, reboot or router change was performed. Physical EFI/iPXE acceptance remains pending.
+
+## Final integration update
+
+The final MicroLink application is1,544,992 bytes. Application-only upload at
+0x20000 passed its hash check; complete4MiB readback verified the application,
+unchanged bootloader/partition/PHY, identical full decoded configuration and
+identical149-byte discovery identity. Credentials were preserved.
+
+The user confirmed normal dashboard access from the phone. This PC still shows
+intermittent TCP transfer loss, including a temporary no-Tailscale diagnostic;
+no causal firmware/AP conclusion is justified. Final firmware retains all
+integrations and normal radio configuration. Authenticated profile export and
+signed stale-cache/mDNS resolution both passed after the final flash. Actual
+UI suite:108 Chromium tests passed; see docs/blind-mode-validation.md for limits.

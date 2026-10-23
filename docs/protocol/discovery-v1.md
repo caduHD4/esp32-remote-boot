@@ -24,6 +24,10 @@ Unbound discovery can display public candidates but cannot send bearer tokens
 or silently trust a key. Two devices with different keys cannot be substituted.
 
 Cache-IP unicast first; if it fails, IPv4 limited and directed LAN broadcasts.
+A bounded mDNS A query for the exact derived remote-boot-<last12 ID hex>.local
+name can locate another candidate when broadcast delivery is blocked. Treat
+DNS answers as untrusted hints: perform the same pinned signed UDP proof before
+publishing/using any candidate IPv4. Include DNS and proof in the one deadline.
 Agent budget10 seconds per attempt with bounded retries/backoff. iPXE total
 budget is the existing supplied timeout (default10000ms) for the discovery
 phase, not timeout per peer. Never put credentials in an EFI image.

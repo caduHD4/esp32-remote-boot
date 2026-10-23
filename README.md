@@ -148,9 +148,9 @@ Use this when the ESP32 or the PC can receive a different IPv4 after a reboot. I
 2. The checkbox only records the requested mode. It does not write EFI, change BootOrder, restart the PC or update an agent.
 3. Click **Exportar perfil de descoberta**. The downloaded public profile contains the ESP device ID, public key, fingerprint, current IPv4 and ports; it contains no token.
 4. Give that profile to the installer on the real PC. The installer displays the fingerprint, asks for explicit trust, backs up the agent/EFI files, prepares the selected agent and image, and then reports preparation. Prepare each OS in a dual-boot PC separately.
-5. Until the installer reports both the loader and the agent as prepared, the dashboard shows the mode as requested/partial, not ready.
+5. Follow the [assisted conversion instructions](installer/README.md) on each OS. Until the installer reports both the loader and the agent as prepared, the dashboard shows the mode as requested/partial, not ready.
 
-The agent verifies the signed UDP reply with the pinned P-256 key before opening WebSocket or sending the bearer token. The ESP also publishes `remote-boot-<id>.local`; the agent tries the cached IP first, then the mDNS hostname, then LAN discovery. If the LAN blocks broadcast or isolates clients, cached-IP/mDNS still works for the agent, but iPXE cannot use mDNS and needs a broadcast-capable LAN or a cached address. This mode does not cross VLANs, guest Wi-Fi isolation or client isolation, and does not change DHCP settings.
+The agent verifies the signed UDP reply with the pinned P-256 key before opening WebSocket or sending the bearer token. The ESP also publishes `remote-boot-<id>.local`; the agent tries the cached IP first, then the mDNS hostname, then LAN discovery. The iPXE loader also tries mDNS when the cached address is stale and broadcast does not answer. A DNS answer supplies only an address candidate; both clients require a fresh signed response from the pinned ESP before using it. This mode does not cross VLANs, guest Wi-Fi isolation or client isolation, and does not change DHCP settings.
 
 ## 5. Download the agents and check the ZIPs
 

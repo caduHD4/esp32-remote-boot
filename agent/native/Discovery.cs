@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -103,21 +104,29 @@ public static class DiscoveryProtocol {
 }
 public sealed class DiscoveryClient {
     readonly bool allowLoopback;readonly IPEndPoint[] testDestinations;
-    public DiscoveryClient(bool allowLoopbackForTests=false,IPEndPoint[] destinations=null){allowLoopback=allowLoopbackForTests;testDestinations=destinations;}
+    readonly Func<string,CancellationToken,Task<IPAddress[]>> resolver;
+    public DiscoveryClient(bool allowLoopbackForTests=false,IPEndPoint[] destinations=null,Func<string,CancellationToken,Task<IPAddress[]>> dnsResolver=null){allowLoopback=allowLoopbackForTests;testDestinations=destinations;resolver=dnsResolver??((host,token)=>Dns.GetHostAddressesAsync(host,token));}
     public List<DiscoveryReply> Discover(DiscoveryProfile expected,int timeoutMs,CancellationToken token) {
         if(timeoutMs<100||timeoutMs>60000)throw new ArgumentOutOfRangeException(nameof(timeoutMs));
         var nonce=RandomNumberGenerator.GetBytes(16);var id=expected==null?new byte[16]:DiscoveryProtocol.HexBytes(expected.DeviceId);
-        var query=DiscoveryProtocol.Query(nonce,id);var sockets=CreateSockets();
+        var query=DiscoveryProtocol.Query(nonce,id);var timer=Stopwatch.StartNew();
+        using var dnsCancellation=CancellationTokenSource.CreateLinkedTokenSource(token);
+        dnsCancellation.CancelAfter(timeoutMs);
+        Task<IPAddress[]> dns=null;
+        if(expected!=null&&expected.Hostname.Length>0) {
+            try{dns=resolver(expected.Hostname,dnsCancellation.Token);}catch(SocketException){}catch(ArgumentException){}
+        }
+        var sockets=CreateSockets();
         try {
-            void SendAll(){foreach(var (socket,broadcast) in sockets)foreach(var destination in Destinations(broadcast,expected)){try{socket.SendTo(query,destination);}catch(SocketException){}}}
+            void SendAll(){foreach(var (socket,broadcast) in sockets)foreach(var destination in Destinations(broadcast,expected,dns)){try{socket.SendTo(query,destination);}catch(SocketException){}}}
             var results=new List<DiscoveryReply>();var seen=new HashSet<string>(StringComparer.Ordinal);
-            var deadline=DateTime.UtcNow.AddMilliseconds(timeoutMs);var idleUntil=DateTime.MaxValue;var nextSend=DateTime.MinValue;var buffer=new byte[512];
-            while(DateTime.UtcNow<deadline) {
+            long idleUntil=long.MaxValue,nextSend=0;var buffer=new byte[512];
+            while(timer.ElapsedMilliseconds<timeoutMs) {
                 token.ThrowIfCancellationRequested();
-                var now=DateTime.UtcNow;if(results.Count>0&&now>=idleUntil)break;
-                if(results.Count==0&&now>=nextSend){SendAll();nextSend=now.AddMilliseconds(1000);}
-                int remain=(int)Math.Max(1,(deadline-DateTime.UtcNow).TotalMilliseconds);
-                int untilSend=(int)Math.Max(1,(nextSend-DateTime.UtcNow).TotalMilliseconds);
+                var now=timer.ElapsedMilliseconds;if(results.Count>0&&now>=idleUntil)break;
+                if(results.Count==0&&now>=nextSend){SendAll();nextSend=now+1000;}
+                int remain=(int)Math.Max(1,timeoutMs-timer.ElapsedMilliseconds);
+                int untilSend=(int)Math.Max(1,nextSend-timer.ElapsedMilliseconds);
                 var readable=new List<Socket>(sockets.Count);foreach(var (socket,_) in sockets)readable.Add(socket);
                 int wait=Math.Min(remain,Math.Min(results.Count>0?500:remain,untilSend));
                 try{Socket.Select(readable,null,null,wait*1000);}catch(SocketException){break;}
@@ -126,11 +135,12 @@ public sealed class DiscoveryClient {
                     try{length=socket.ReceiveFrom(buffer,ref remote);}catch(SocketException){continue;}
                     if(remote is not IPEndPoint source)continue;
                     if(!DiscoveryProtocol.TryParse(buffer.AsSpan(0,length).ToArray(),source,nonce,expected,allowLoopback,out var reply)||!seen.Add(reply.DeviceId))continue;
-                    results.Add(reply);if(expected!=null)return results;idleUntil=DateTime.UtcNow.AddMilliseconds(500);
+                    token.ThrowIfCancellationRequested();if(timer.ElapsedMilliseconds>=timeoutMs)break;
+                    results.Add(reply);if(expected!=null)return results;idleUntil=timer.ElapsedMilliseconds+500;
                 }
             }
             return results;
-        } finally {foreach(var (socket,_) in sockets)socket.Dispose();}
+        } finally {dnsCancellation.Cancel();if(dns!=null)_=dns.ContinueWith(task=>{_ = task.Exception;},TaskContinuationOptions.OnlyOnFaulted);foreach(var (socket,_) in sockets)socket.Dispose();}
     }
     List<(Socket socket,IPAddress broadcast)> CreateSockets() {
         var sockets=new List<(Socket,IPAddress)>();
@@ -159,12 +169,12 @@ public sealed class DiscoveryClient {
         }
         return result;
     }
-    List<IPEndPoint> Destinations(IPAddress broadcast,DiscoveryProfile expected) {
+    List<IPEndPoint> Destinations(IPAddress broadcast,DiscoveryProfile expected,Task<IPAddress[]> dns) {
         if(testDestinations!=null)return testDestinations.ToList();
         var list=new List<IPEndPoint>();var seen=new HashSet<string>(StringComparer.Ordinal);
         void Add(IPAddress address){if(address==null)return;var key=address.ToString();if(seen.Add(key))list.Add(new IPEndPoint(address,DiscoveryProtocol.Port));}
         if(expected!=null&&IPAddress.TryParse(expected.LastIpv4,out var cached))Add(cached);
-        if(expected!=null&&expected.Hostname.Length>0){try{foreach(var address in Dns.GetHostAddresses(expected.Hostname))if(address.AddressFamily==AddressFamily.InterNetwork)Add(address);}catch(SocketException){}catch(ArgumentException){}}
+        if(dns!=null&&dns.IsCompletedSuccessfully)foreach(var address in dns.Result)if(address.AddressFamily==AddressFamily.InterNetwork)Add(address);
         Add(IPAddress.Broadcast);Add(broadcast);return list;
     }
 }
