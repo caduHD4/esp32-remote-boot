@@ -12,7 +12,7 @@ FILES = ('state.json', 'agent.json', 'agent.bin', 'ipxe.efi', 'manifest.json', '
 
 
 @contextmanager
-def directory(path):
+def directory(path, allow_missing=False):
     if not os.path.isabs(path) or '..' in path.split(os.sep):
         raise ValueError('Expected an absolute path without parent traversal')
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
@@ -20,7 +20,13 @@ def directory(path):
         for name in path.split(os.sep):
             if not name or name == '.':
                 continue
-            next_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            try:
+                next_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not allow_missing:
+                    raise
+                yield None
+                return
             os.close(fd)
             fd = next_fd
         yield fd
@@ -83,6 +89,14 @@ def seal(backup):
         replace(fd, 'integrity.json', json.dumps(digests).encode(), 0o600)
 
 
+@contextmanager
+def efi_directory(state, contents):
+    with directory(state['target'], allow_missing=True) as fd:
+        if fd is None and any(name in contents for name in ('ipxe.efi', 'manifest.json')):
+            raise ValueError('Original EFI artifacts require their target directory; mount/restore it first')
+        yield fd
+
+
 def checked(backup, destinations=True):
     with directory(backup) as fd:
         digests = json.loads(read(fd, 'integrity.json'))
@@ -106,9 +120,10 @@ def checked(backup, destinations=True):
             with directory(os.path.dirname(state[key])) as parent:
                 regular(parent, os.path.basename(state[key]), True)
         if destinations:
-            with directory(state['target']) as parent:
-                for name in ('ipxe.efi', 'manifest.json'):
-                    regular(parent, name, True)
+            with efi_directory(state, contents) as parent:
+                if parent is not None:
+                    for name in ('ipxe.efi', 'manifest.json'):
+                        regular(parent, name, True)
         return state, contents
 
 
@@ -150,12 +165,15 @@ def restore(backup):
     with ExitStack() as stack:
         config_dir = stack.enter_context(directory(os.path.dirname(state['config'])))
         binary_dir = stack.enter_context(directory(os.path.dirname(state['binary'])))
-        efi_dir = stack.enter_context(directory(state['target']))
-        for fd, name in ((config_dir, os.path.basename(state['config'])), (binary_dir, os.path.basename(state['binary'])), (efi_dir, 'ipxe.efi'), (efi_dir, 'manifest.json')):
+        efi_dir = stack.enter_context(efi_directory(state, contents))
+        destinations = [(config_dir, os.path.basename(state['config'])), (binary_dir, os.path.basename(state['binary']))]
+        if efi_dir is not None:
+            destinations.extend((efi_dir, name) for name in ('ipxe.efi', 'manifest.json'))
+        for fd, name in destinations:
             regular(fd, name, True)
         for key, fd, source in (('config', config_dir, 'agent.json'), ('binary', binary_dir, 'agent.bin')):
             replace(fd, os.path.basename(state[key]), contents[source], int(state[key + '_mode'], 8), state[key + '_uid'], state[key + '_gid'])
-        for name in ('ipxe.efi', 'manifest.json'):
+        for name in (() if efi_dir is None else ('ipxe.efi', 'manifest.json')):
             if name in contents:
                 replace(efi_dir, name, contents[name], 0o600)
             else:

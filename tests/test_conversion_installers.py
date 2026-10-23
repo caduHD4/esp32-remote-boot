@@ -29,9 +29,14 @@ def run(scenario):
             code = file.read_text().replace('[[ $EUID == 0 && -d /sys/firmware/efi/efivars ]]', '[[ 1 == 1 ]]')
             file.write_text(code)
         tools = box / 'tools'; tools.mkdir()
-        efi = box / 'esp/EFI/iPXE'; efi.mkdir(parents=True)
-        (efi / 'ipxe.efi').write_bytes(b'old EFI')
-        (efi / 'manifest.json').write_bytes(b'old manifest')
+        no_efi = scenario.startswith('atomic-apply-fail-no-')
+        efi = box / 'esp/EFI/iPXE'
+        if no_efi:
+            (efi.parent if scenario.endswith('ipxe') else box / 'esp').mkdir(parents=True)
+        else:
+            efi.mkdir(parents=True)
+            (efi / 'ipxe.efi').write_bytes(b'old EFI')
+            (efi / 'manifest.json').write_bytes(b'old manifest')
         config = box / 'agent/agent.json'; config.parent.mkdir()
         original = dict(protocol=2, pc_id='a'*32, agent_id='c'*32, token='fixture-token-not-real',
                         url='http://192.168.1.20', allow_reboot=True, allow_shutdown=False)
@@ -90,7 +95,7 @@ if os.environ['FIXTURE_SCENARIO'].startswith('atomic-'):
  t=c+'.agent-save';open(t,'w').write(json.dumps(d));os.chmod(t,0o600);os.replace(t,c)
 else: open(c,'w').write(json.dumps(d))
 AGENT
-  [[ $FIXTURE_SCENARIO != atomic-apply-fail ]] || exit 4
+  [[ $FIXTURE_SCENARIO != atomic-apply-fail* ]] || exit 4
 fi
 if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == atomic-report* ]]; then
   python3 - "$@" <<'REPORT'
@@ -119,12 +124,12 @@ if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == stale ]]; then exit 5
             assert '--apply-profile' not in trace and 'service stop' not in trace and 'efi --' not in trace, detail
             assert (result.returncode == 0) == scenario.startswith('cancel-'), detail
         else:
-            assert (result.returncode != 0) == (scenario in ('stale', 'apply-fail', 'efi-fail', 'atomic-apply-fail', 'atomic-report-fail')), detail
+            assert (result.returncode != 0) == (scenario in ('stale', 'apply-fail', 'efi-fail', 'atomic-apply-fail', 'atomic-report-fail') or no_efi), detail
             backup = next((box / 'backups').iterdir())
             assert (backup / 'agent.json').read_bytes() == old, detail
             assert (backup.stat().st_mode & 0o077) == 0, detail
             assert (config.stat().st_mode & 0o777) == original_mode and (config.stat().st_uid, config.stat().st_gid) == original_owner, detail
-            if scenario not in ('apply-fail', 'efi-fail', 'atomic-apply-fail'):
+            if scenario not in ('apply-fail', 'efi-fail', 'atomic-apply-fail') and not no_efi:
                 current = json.loads(config.read_text())
                 for k in ('pc_id', 'agent_id', 'token', 'allow_reboot', 'allow_shutdown'): assert current[k] == original[k], detail
                 assert current['blind_mode'] is profile['blind_mode'], detail
@@ -156,10 +161,26 @@ if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == stale ]]; then exit 5
                 assert refused.returncode != 0 and config.read_bytes() == current_config, (scenario, refused.stdout, refused.stderr)
                 if scenario == 'rollback-ancestor': config.parent.unlink(); (box / 'real-agent').rename(config.parent)
                 (backup / 'agent.bin').write_bytes(saved_binary); (backup / 'state.json').write_bytes(saved_state); (backup / 'integrity.json').write_bytes(saved_integrity)
+            if scenario == 'atomic-apply-fail-no-efi-link':
+                unrelated = box / 'unrelated-dir'; unrelated.mkdir(); (box / 'esp/EFI').symlink_to(unrelated, target_is_directory=True)
+                current_config = config.read_bytes()
+                refused = subprocess.run(['bash', str(root / 'installer/linux/install.sh'), '--rollback', str(backup)], input='RESTORE\n', text=True, capture_output=True, env=env, timeout=20)
+                assert refused.returncode != 0 and config.read_bytes() == current_config and not list(unrelated.iterdir()), (scenario, refused.stdout, refused.stderr)
+                (box / 'esp/EFI').unlink()
+            if scenario == 'rollback-required-efi-missing':
+                current_config = config.read_bytes(); shutil.rmtree(efi)
+                refused = subprocess.run(['bash', str(root / 'installer/linux/install.sh'), '--rollback', str(backup)], input='RESTORE\n', text=True, capture_output=True, env=env, timeout=20)
+                assert refused.returncode != 0 and config.read_bytes() == current_config and not efi.exists(), (scenario, refused.stdout, refused.stderr)
+                efi.mkdir(); (efi / 'ipxe.efi').write_bytes(b'new EFI'); (efi / 'manifest.json').write_text(json.dumps(manifest))
             rolled = subprocess.run(['bash', str(root / 'installer/linux/install.sh'), '--rollback', str(backup)], input='RESTORE\n', text=True, capture_output=True, env=env, timeout=20)
             assert sentinel.read_bytes() == b'untouched' and not config.is_symlink(), (scenario, rolled.stdout, rolled.stderr)
             assert rolled.returncode == 0, (detail, rolled.stdout, rolled.stderr)
-            assert config.read_bytes() == old and installed.read_bytes() == old_binary and (efi / 'ipxe.efi').read_bytes() == b'old EFI' and (efi / 'manifest.json').read_bytes() == b'old manifest', detail
+            assert config.read_bytes() == old and installed.read_bytes() == old_binary, detail
+            if no_efi:
+                assert not efi.exists() and (scenario.endswith('ipxe') or not efi.parent.exists()), detail
+                assert (config.stat().st_mode & 0o777) == original_mode and (config.stat().st_uid, config.stat().st_gid) == original_owner, detail
+            else:
+                assert (efi / 'ipxe.efi').read_bytes() == b'old EFI' and (efi / 'manifest.json').read_bytes() == b'old manifest', detail
             trace = (box / 'events').read_text()
             assert 'efi --bootorder' not in trace and 'efi --bootnext' not in trace, detail
         print('PASS Linux conversion:', scenario)
@@ -167,5 +188,5 @@ if [[ $* == *--report-preparation* && $FIXTURE_SCENARIO == stale ]]; then exit 5
 
 if __name__ == '__main__':
     import sys
-    for case in (sys.argv[1:] or ('success', 'normal', 'rerun', 'inactive', 'wrong-pc', 'wrong-mode', 'wrong-revision', 'wrong-device', 'wrong-pin', 'wrong-key-only', 'bad-hash', 'cancel-trust', 'cancel-install', 'apply-fail', 'efi-fail', 'stale', 'atomic-apply', 'atomic-owner-group', 'atomic-report', 'atomic-apply-fail', 'atomic-report-fail', 'rollback-staged-link', 'rollback-bad-backup', 'rollback-ancestor', 'rollback-escaped-target')):
+    for case in (sys.argv[1:] or ('success', 'normal', 'rerun', 'inactive', 'wrong-pc', 'wrong-mode', 'wrong-revision', 'wrong-device', 'wrong-pin', 'wrong-key-only', 'bad-hash', 'cancel-trust', 'cancel-install', 'apply-fail', 'efi-fail', 'stale', 'atomic-apply', 'atomic-owner-group', 'atomic-report', 'atomic-apply-fail', 'atomic-report-fail', 'rollback-staged-link', 'rollback-bad-backup', 'rollback-ancestor', 'rollback-escaped-target', 'atomic-apply-fail-no-efi', 'atomic-apply-fail-no-ipxe', 'atomic-apply-fail-no-efi-link', 'rollback-required-efi-missing')):
         run(case)
