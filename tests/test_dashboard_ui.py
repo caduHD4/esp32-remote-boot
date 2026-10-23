@@ -37,6 +37,12 @@ assert "setDhcpVisibility" in js
 assert "setBusy" in js
 assert "showToast" in js
 assert "storeRememberedLogin" in js
+assert "Ativar modo cego" in js
+assert "pcPreparation" in js
+assert "INVALID_BLIND_MODE" in js
+assert 'id="exportProfile"' in html
+assert 'id="newPcBlindMode"' in html
+assert "preparation-note" in css
 
 spec = importlib.util.spec_from_file_location("embed_web", ROOT / "scripts/embed_web.py")
 module = importlib.util.module_from_spec(spec)

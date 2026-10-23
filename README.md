@@ -140,6 +140,18 @@ For dual boot, create **one record for the physical PC**, then pair both OS agen
 
 **Checkpoint:** the PC card appears. Offline is expected until its agent connects. The internal PC ID is generated automatically; you do not need to find it in the dashboard.
 
+## 4b. Optional: blind mode (dynamic IP)
+
+Use this when the ESP32 or the PC can receive a different IPv4 after a reboot. It is optional and per PC.
+
+1. In **Ajustes do PC selecionado**, check **Ativar modo cego — encontrar a ESP automaticamente quando o IP mudar**, then save. On **Adicionar PC**, the same checkbox is available.
+2. The checkbox only records the requested mode. It does not write EFI, change BootOrder, restart the PC or update an agent.
+3. Click **Exportar perfil de descoberta**. The downloaded public profile contains the ESP device ID, public key, fingerprint, current IPv4 and ports; it contains no token.
+4. Give that profile to the installer on the real PC. The installer displays the fingerprint, asks for explicit trust, backs up the agent/EFI files, prepares the selected agent and image, and then reports preparation. Prepare each OS in a dual-boot PC separately.
+5. Until the installer reports both the loader and the agent as prepared, the dashboard shows the mode as requested/partial, not ready.
+
+The agent verifies the signed UDP reply with the pinned P-256 key before opening WebSocket or sending the bearer token. The ESP also publishes `remote-boot-<id>.local`; the agent tries the cached IP first, then the mDNS hostname, then LAN discovery. If the LAN blocks broadcast or isolates clients, cached-IP/mDNS still works for the agent, but iPXE cannot use mDNS and needs a broadcast-capable LAN or a cached address. This mode does not cross VLANs, guest Wi-Fi isolation or client isolation, and does not change DHCP settings.
+
 ## 5. Download the agents and check the ZIPs
 
 From the same [3.x release](https://github.com/caduHD4/esp32-remote-boot/releases), download **agent-SHA256SUMS** and the package for each OS you use:

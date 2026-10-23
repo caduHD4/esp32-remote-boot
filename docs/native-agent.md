@@ -43,6 +43,19 @@ remote-boot-agent --config PATH
 remote-boot-agent --self-test
 ```
 
+Modo cego (opcional): a configuração ganha `blind_mode`, `mode_revision`, `device_id`, `public_key`, `fingerprint` e `discovery_version`. Antes de abrir WebSocket ou enviar o token, o agent valida a resposta UDP assinada da ESP com a chave fixada. Depois tenta o IP em cache, o hostname mDNS `remote-boot-<id>.local` e a descoberta LAN; o endereço verificado é salvo atomicamente no caminho de configuração fornecido. Configurações antigas continuam válidas.
+
+CLI adicional:
+
+```text
+remote-boot-agent --discover [--profile FILE] [--timeout-ms N]
+remote-boot-agent --resolve --profile FILE
+remote-boot-agent --apply-profile FILE --config PATH --confirm-fingerprint HEX64
+remote-boot-agent --report-preparation MANIFEST --config PATH
+```
+
+`--discover` lista candidatos públicos sem enviar bearer; com `--profile`, retorna somente a ESP fixada e verificada. `--resolve` imprime apenas o IPv4 verificado. `--apply-profile` confere a impressão digital e o PC ID, preserva token/permissões, verifica o dispositivo antes de salvar no modo cego e mantém o pin para conversão futura. `--report-preparation` valida o manifesto e reporta o preparo autenticado ao servidor; isso não prova boot físico. Exporte o perfil público na dashboard autenticada e confirme a impressão digital no instalador. O agent não grava EFI, não altera BootOrder e não reinicia o PC.
+
 `--check` realiza hello e sync uma vez, sem processar comandos de energia. Permissões são desabilitadas por padrão. A configuração gerada contém `protocol:2`, `url`, `pc_id` e `agent_id` de 32 hexadecimais minúsculos, `token` de 64 hexadecimais e `allow_reboot`/`allow_shutdown`. O campo opcional `ws_port` tem padrão 81. Não copie tokens nem use a senha administrativa como credencial do agent. Um lock na pasta impede processos simultâneos.
 
 ## Protocolo e segurança

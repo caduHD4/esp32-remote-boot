@@ -7,6 +7,16 @@ const credential=globalThis.RemoteBootValidation.validateCredential;
 const tailscaleKey=globalThis.RemoteBootValidation.validateTailscaleAuthKey;
 const rememberedLogin=globalThis.RemoteBootValidation.rememberedLogin;
 const storeRememberedLogin=globalThis.RemoteBootValidation.storeRememberedLogin;
+const pcBlindMode=globalThis.RemoteBootValidation.pcBlindMode;
+const pcPreparation=globalThis.RemoteBootValidation.pcPreparation;
+assert.equal(pcBlindMode({}),false);
+assert.equal(pcBlindMode({blind_mode:true}),true);
+const oldPc=pcPreparation({pc_id:'p'},[]);
+assert.equal(oldPc.requested,false);assert.equal(oldPc.bootPrepared,false);assert.equal(oldPc.complete,false);assert.equal(oldPc.agentsTotal,0);
+const partial=pcPreparation({pc_id:'p',blind_mode:true,mode_revision:2,boot_mode_revision:1,boot_blind_mode:false},[{pc_id:'p',boot_prepared:true,prepared_mode_revision:2,prepared_blind_mode:true}]);
+assert.equal(partial.requested,true);assert.equal(partial.bootPrepared,false);assert.equal(partial.agentsPrepared,1);assert.equal(partial.complete,false);
+const complete=pcPreparation({pc_id:'p',blind_mode:true,mode_revision:2,boot_mode_revision:2,boot_blind_mode:true},[{pc_id:'p',boot_prepared:true,prepared_mode_revision:2,prepared_blind_mode:true}]);
+assert.equal(complete.bootPrepared,true);assert.equal(complete.agentsPrepared,1);assert.equal(complete.complete,true);
 assert.equal(tailscaleKey(''),true);
 assert.equal(tailscaleKey('tskey-auth-k12345678901234567890'),true);
 assert.equal(tailscaleKey('invalid'),false);
@@ -53,4 +63,4 @@ result=check({enabled:true,appKey:'abcdefghij',appSecret:'abcdefghij',slots:[{de
 assert.equal(result.valid,true);
 assert.deepEqual(result.slots,[{device_id:id,boot_id:'0008'}]);
 
-console.log('PASS: browser-side Sinric validation');
+console.log('PASS: browser-side Sinric validation and blind-mode preparation state');

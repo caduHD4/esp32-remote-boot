@@ -138,6 +138,18 @@ No dual boot, crie **um cadastro para o computador físico** e pareie os dois ag
 
 **Confira antes de continuar:** o card do PC apareceu. Ele ficar offline é esperado até o agent conectar. O PC ID interno é gerado automaticamente; você não precisa procurá-lo na dashboard.
 
+## 4b. Opcional: modo cego (IP dinâmico)
+
+Use quando a ESP32 ou o PC puder receber outro IPv4 depois de reiniciar. É opcional e por PC.
+
+1. Em **Ajustes do PC selecionado**, marque **Ativar modo cego — encontrar a ESP automaticamente quando o IP mudar** e salve. Em **Adicionar PC**, a mesma opção está disponível.
+2. A checkbox só registra o modo desejado. Ela não grava EFI, não altera BootOrder, não reinicia o PC e não atualiza o agent.
+3. Clique **Exportar perfil de descoberta**. O perfil público baixado contém ID/dispositivo, chave pública, impressão digital, IPv4 atual e portas da ESP; não contém token.
+4. Entregue o perfil ao instalador no PC real. O instalador mostra a impressão digital, pede confirmação explícita de confiança, faz backup do agent/EFI, prepara o agent e a imagem escolhidos e só então reporta o preparo. Em dual boot, prepare cada sistema separadamente.
+5. Até o instalador reportar carregador e agent preparados, a dashboard mostra o modo como solicitado/parcial, não como pronto.
+
+O agent verifica a resposta UDP assinada com a chave P-256 fixada antes de abrir WebSocket ou enviar o bearer. A ESP também publica `remote-boot-<id>.local`; o agent tenta o IP em cache, depois o hostname mDNS e depois a descoberta LAN. Se a LAN bloquear broadcast ou isolar clientes, IP em cache/mDNS ainda funciona para o agent, mas o iPXE não usa mDNS e precisa de broadcast na LAN ou de um endereço em cache. O modo não atravessa VLAN, Wi-Fi de convidado ou isolamento entre clientes, e não altera DHCP.
+
 ## 5. Baixe os agents e confira os ZIPs
 
 Na mesma [release 3.x](https://github.com/caduHD4/esp32-remote-boot/releases), baixe **agent-SHA256SUMS** e o pacote de cada sistema usado:
