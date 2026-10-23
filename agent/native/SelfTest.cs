@@ -171,6 +171,7 @@ public static class SelfTest {
             using var no=Message("ack",new string('d',32),"session-one",accepted:false);Assert(gate.Commit(no.RootElement)=="");Assert(host.Calls==1);Assert(gate.Accept(command.RootElement)=="");
             PairingTests(directory).GetAwaiter().GetResult();
             Protocol(Path.Combine(directory,"protocol-ack")).GetAwaiter().GetResult();
+            DiscoverySelfTest.Run();
             Console.WriteLine("PASS: permission, session, duplicate, persistence, unsupported action, rejected ACK (no real power commands)");return 0;
         } finally { Directory.Delete(directory,true); }
     }
