@@ -1,0 +1,11 @@
+#!ipxe
+echo Remote Boot (modo cego)
+ifconf --configurator dhcp --timeout @TIMEOUT@ net0 || goto failed
+rbdiscover @DEVICE_ID@ @PUBLIC_KEY@ @LAST_IPV4@ @TIMEOUT@ || goto failed
+echo Discovery OK (${rb_ip})
+imgfetch --name selection --timeout @TIMEOUT@ http://${rb_ip}/boot/@PC_ID@.ipxe || goto failed
+imgexec selection || goto failed
+exit
+:failed
+echo Remote Boot discovery or loader failure
+exit 1

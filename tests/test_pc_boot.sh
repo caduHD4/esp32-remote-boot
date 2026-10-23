@@ -20,16 +20,25 @@ fixture_root="$tmp/project"
 mkdir -p "$fixture_root/ipxe" "$fixture_root/uefi/remote-boot"
 cp "$root/ipxe/build.sh" "$root/ipxe/remote-boot.ipxe.in" "$fixture_root/ipxe/"
 
+printf 'fixture' > "$fixture_root/uefi/remote-boot/remote_boot.c"
+printf 'fixture' > "$fixture_root/uefi/remote-boot/load_option.h"
+printf 'all:\n\ttrue\n' > "$fixture_root/uefi/remote-boot/Makefile"
 mkdir -p "$tmp/bin" "$tmp/ipxe/src/bin-x86_64-efi" "$tmp/ipxe/.git"
 cat > "$tmp/bin/git" <<'EOF'
 #!/usr/bin/env bash
-if [[ $1 == -C && $3 == rev-parse ]]; then echo 7ada3e0f04d0526747df5e0e46c05c94cbf7a7d1; fi
+set -euo pipefail
+[[ $1 == -C ]] || exit 1
+case $3 in
+    cat-file) exit 0 ;;
+    archive) tar -cf - -C "$2" src ;;
+    *) echo "Unexpected mutating Git call: $3" >&2; exit 1 ;;
+esac
 EOF
 cat > "$tmp/bin/make" <<'EOF'
 #!/usr/bin/env bash
 dir=''; [[ $1 != -C ]] || dir=$2
 embed=''; for arg in "$@"; do [[ $arg != EMBED=* ]] || embed=${arg#EMBED=}; done
-if [[ $dir == */uefi/remote-boot ]]; then
+if [[ -f $dir/remote_boot.c ]]; then
     [[ " $* " == *" -B "* ]] || { echo 'Loader build must force regeneration' >&2; exit 1; }
     printf 'MZloader-a' > "$dir/RemoteBoot.efi"
 elif [[ $dir == */ipxe/src ]]; then printf 'MZ' > "$dir/bin-x86_64-efi/ipxe.efi"; cat "${embed%%,*}" >> "$dir/bin-x86_64-efi/ipxe.efi"
