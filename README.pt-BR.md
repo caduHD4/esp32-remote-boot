@@ -146,9 +146,11 @@ Use quando a ESP32 ou o PC puder receber outro IPv4 depois de reiniciar. É opci
 2. A checkbox só registra o modo desejado. Ela não grava EFI, não altera BootOrder, não reinicia o PC e não atualiza o agent.
 3. Clique **Exportar perfil de descoberta**. O perfil público baixado contém ID/dispositivo, chave pública, impressão digital, IPv4 atual e portas da ESP; não contém token.
 4. Entregue o perfil ao instalador no PC real. O instalador mostra a impressão digital, pede confirmação explícita de confiança, faz backup do agent/EFI, prepara o agent e a imagem escolhidos e só então reporta o preparo. Em dual boot, prepare cada sistema separadamente.
-5. Até o instalador reportar carregador e agent preparados, a dashboard mostra o modo como solicitado/parcial, não como pronto.
+5. Siga as [instruções de conversão assistida](installer/README.md) em cada sistema. Até o instalador reportar carregador e agent preparados, a dashboard mostra o modo como solicitado/parcial, não como pronto.
 
-O agent verifica a resposta UDP assinada com a chave P-256 fixada antes de abrir WebSocket ou enviar o bearer. A ESP também publica `remote-boot-<id>.local`; o agent tenta o IP em cache, depois o hostname mDNS e depois a descoberta LAN. Se a LAN bloquear broadcast ou isolar clientes, IP em cache/mDNS ainda funciona para o agent, mas o iPXE não usa mDNS e precisa de broadcast na LAN ou de um endereço em cache. O modo não atravessa VLAN, Wi-Fi de convidado ou isolamento entre clientes, e não altera DHCP.
+O agent verifica a resposta UDP assinada com a chave P-256 fixada antes de abrir WebSocket ou enviar o bearer. A ESP também publica `remote-boot-<id>.local`; o agent tenta o IP em cache, depois o hostname mDNS e depois a descoberta LAN. O iPXE também tenta mDNS quando o endereço em cache está desatualizado e o broadcast não responde. Uma resposta DNS fornece apenas um endereço candidato; agent e iPXE exigem uma nova resposta assinada pela ESP conhecida antes de usá-lo. O modo não atravessa VLAN, Wi-Fi de convidado ou isolamento entre clientes, e não altera DHCP.
+
+Para voltar ao modo normal, desmarque a opção, salve, exporte um novo perfil e execute novamente a conversão assistida em cada sistema. Não refaça o pareamento. A checkbox sozinha não atualiza o agent ou iPXE; no modo normal, reserve o IPv4 da ESP no roteador. Veja os [resultados e limites da validação](docs/blind-mode-validation.md).
 
 ## 5. Baixe os agents e confira os ZIPs
 
@@ -376,7 +378,7 @@ Se falhar, escolha o loader Windows/Linux existente pelo menu UEFI e faça o dia
 | net0 no such network device | Habilite Network Stack/IPv4 PXE na BIOS. RTL8125 precisa do driver UEFI/SNP nesta revisão iPXE. |
 | file:autoexec.ipxe not found | Se aparece Remote Boot depois, o script embutido está rodando; investigue o erro seguinte. |
 | DHCP falha | Cabo Ethernet, DHCP do roteador, driver UEFI, VLAN e interface escolhida pelo iPXE. |
-| Não baixa a URL do script | IP reservado da ESP32, acesso pela rede e cadastro do PC. Recompile se o IP/identidade mudar. |
+| Não baixa a URL do script | Acesso pela rede e cadastro do PC. No modo normal, confira o IP reservado; no modo cego, confira a descoberta assinada. Recompile se a identidade mudar. |
 | Exec format error / RemoteBoot failed | Use o builder atualizado e recompile/reinstale. RemoteBoot.efi precisa ser uma aplicação EFI x86-64 real, não um fixture ou artefato antigo. |
 | iPXE não aparece no GRUB | Ele é uma entrada UEFI separada do menu GRUB. Confira o menu do firmware e a entrada EFI. |
 | PC inicia normalmente depois de TEST | TEST é temporário; valide a etapa 9 e então configure prioridade permanente na etapa 10. |
@@ -387,7 +389,7 @@ Mais: [diagnóstico](docs/troubleshooting.md), [detalhes do agent](docs/native-a
 
 ## Atualizações e verificações de desenvolvimento
 
-Uploads comuns preservam as configurações NVS. Trocar IP da ESP32, identidade do PC ou código EFI exige recompilar e reinstalar a imagem iPXE desse PC. Atualizar apenas o firmware ESP32 não substitui os arquivos EFI do computador. Não há atualização OTA.
+Uploads comuns preservam as configurações NVS. No modo normal, trocar o IP da ESP32 exige recompilar e reinstalar a imagem iPXE desse PC. No modo cego, uma mudança de IP na mesma LAN é descoberta automaticamente, sem reinstalação. Trocar a identidade do PC ou o código EFI ainda exige atualizar sua imagem. Atualizar apenas o firmware ESP32 não substitui os arquivos EFI do computador. Não há atualização OTA.
 
 Na pasta do código, com as dependências de desenvolvimento instaladas:
 

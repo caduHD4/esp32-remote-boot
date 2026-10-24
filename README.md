@@ -152,6 +152,8 @@ Use this when the ESP32 or the PC can receive a different IPv4 after a reboot. I
 
 The agent verifies the signed UDP reply with the pinned P-256 key before opening WebSocket or sending the bearer token. The ESP also publishes `remote-boot-<id>.local`; the agent tries the cached IP first, then the mDNS hostname, then LAN discovery. The iPXE loader also tries mDNS when the cached address is stale and broadcast does not answer. A DNS answer supplies only an address candidate; both clients require a fresh signed response from the pinned ESP before using it. This mode does not cross VLANs, guest Wi-Fi isolation or client isolation, and does not change DHCP settings.
 
+To return to normal mode, uncheck the option, save, export a fresh profile, and run assisted conversion again on each OS. Do not pair again. The checkbox alone does not update the agent or iPXE; normal mode requires reserving the ESP IPv4 on the router. See [validation results and limits](docs/blind-mode-validation.md).
+
 ## 5. Download the agents and check the ZIPs
 
 From the same [3.x release](https://github.com/caduHD4/esp32-remote-boot/releases), download **agent-SHA256SUMS** and the package for each OS you use:
@@ -389,7 +391,7 @@ More: [troubleshooting](docs/troubleshooting.md), [agent details](docs/native-ag
 
 ## Updates and development checks
 
-Ordinary firmware uploads preserve NVS settings. Changing the ESP32 IP, PC identity, or EFI code requires rebuilding and reinstalling that PC's iPXE image. Updating only the ESP32 firmware does not replace the PC's EFI files. There is no OTA update.
+Ordinary firmware uploads preserve NVS settings. In normal mode, changing the ESP32 IP requires rebuilding and reinstalling that PC's iPXE image. In blind mode, an IP change within the same LAN is discovered automatically without reinstalling. Changing the PC identity or EFI code still requires updating its image. Updating only the ESP32 firmware does not replace the PC's EFI files. There is no OTA update.
 
 From the source folder, with development dependencies installed:
 
