@@ -15,12 +15,9 @@ public:
         // set it too: lwIP otherwise allows close() to wait its default20s.
         timeval sendTimeout{1,0};
         if(lwip_setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&sendTimeout,sizeof sendTimeout)!=0){peer.stop();return false;}
-        size_t sent=0;unsigned attempts=0;
-        auto write=[fd,&sent,&attempts](const uint8_t* data,size_t n)->int {
-            ++attempts;
+        auto write=[fd](const uint8_t* data,size_t n)->int {
             const int result=lwip_send(fd,data,n,MSG_DONTWAIT);
             if(result<0&&(errno==EAGAIN||errno==EWOULDBLOCK||errno==EINTR))return 0;
-            if(result>0)sent+=size_t(result);
             return result>0?result:-1;
         };
         auto now=[]()->uint32_t{return millis();};auto alive=[&peer]{return bool(peer.connected());};auto yield=[]{delay(1);};
@@ -28,7 +25,8 @@ public:
         bool okay=sendAssetBytes(reinterpret_cast<const uint8_t*>(header.c_str()),header.length(),write,now,alive,yield,total,idle);
         const uint32_t elapsed=uint32_t(millis()-started);
         if(okay)okay=sendAssetBytes(bytes,length,write,now,alive,yield,elapsed<total?total-elapsed:0,idle);
-        Serial.printf("HTTP asset: complete=%d sent=%u expected=%u elapsed=%u attempts=%u\n",okay,unsigned(sent),unsigned(header.length()+length),unsigned(millis()-started),attempts);
+        // USB diagnostics can block for seconds when no serial monitor reads.
+        // Keep the response path free of serial writes; failures use the event log.
         if(!okay) {
             #if defined(LWIP_SO_LINGER) && LWIP_SO_LINGER
             linger immediate{1,0};lwip_setsockopt(fd,SOL_SOCKET,SO_LINGER,&immediate,sizeof immediate);

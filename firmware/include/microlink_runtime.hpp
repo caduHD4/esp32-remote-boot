@@ -38,6 +38,7 @@ private:
     void tryStart(bool wifiConnected);
 
     bool wifiConnected_ = false, sinricLease_ = false;
+    uint32_t bootstrapStarted_ = 0;
     uint32_t lastSinricAttempt_ = 0;
     uint32_t sinricServiceStarted_ = 0;
     bool configLocked_ = false;

@@ -483,6 +483,7 @@ void ml_derp_tx_task(void *arg) {
     microlink_t *ml = (microlink_t *)arg;
     ESP_LOGI(TAG, "DERP I/O task started (Core %d)", xPortGetCoreID());
 
+    const uint32_t bootstrap_started_ms = (uint32_t)ml_get_time_ms();
     uint32_t frames_rx = 0;
     uint32_t frames_tx = 0;
     uint64_t last_status_ms = 0;
@@ -532,7 +533,9 @@ void ml_derp_tx_task(void *arg) {
             bits = xEventGroupGetBits(ml->events);
             if ((bits & ML_EVT_DERP_CONNECT_REQ) && !ml->derp.connected &&
                 (int32_t)(now-retry_at_ms) >= 0) {
-                bool admitted = ml_tls_admit(now, previous_attempt_ms,
+                bool admitted = ml_tls_after_bootstrap(
+                    __atomic_load_n(&ml->diagnostics.control_online, __ATOMIC_RELAXED),
+                    now, bootstrap_started_ms) && ml_tls_admit(now, previous_attempt_ms,
                     heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
                     heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
                 if (admitted && microlink_tls_try_acquire()) {

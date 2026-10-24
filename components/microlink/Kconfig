@@ -1,5 +1,19 @@
 menu "MicroLink V2 Configuration"
 
+    config ML_PREFERRED_DERP_REGION
+        int "Preferred Tailscale DERP region"
+        default 9
+        range 1 65535
+        help
+            Advertise a nearby relay region (11 = Sao Paulo).
+            Direct UDP is still preferred when available.
+
+    config ML_FALLBACK_DERP_HOST
+        string "Fallback hostname for the preferred DERP region"
+        default "derp9e.tailscale.com"
+        help
+            Use a hostname in the selected region until DERPMap is available.
+
     config ML_ZERO_COPY_WG
         bool "Enable zero-copy WireGuard receive (high-throughput mode)"
         default n

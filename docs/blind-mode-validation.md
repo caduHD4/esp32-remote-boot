@@ -35,20 +35,31 @@ LAN. O teste final teve oito downloads completos da dashboard e vinte pings
 sem perdas; o usuário confirmou abertura e login. Não ficou rota fixa para o
 IP da ESP. Veja [diagnóstico de acesso](network-access-2026-10-23.md).
 A imagem completa foi restaurada após os diagnósticos; Tailscale não foi
-desativado na configuração. O caminho sem fio ainda precisa de nova validação.
+desativado na configuração. Posteriormente, o usuário confirmou acesso pelo
+Wi-Fi e pelo 4G com Tailscale após a correção do retorno por relay.
 
 Foram corrigidos dois defeitos de transporte identificados no código: o envio
 do HTML agora trata escritas parciais e contrapressão com prazos; cada cliente
 TLS Sinric recebe limite de handshake de três segundos. Essas correções não
-constituem a correção da rota local descrita acima. DNS do serviço
-Sinric e a pressão de memória da coordenação MicroLink ainda exigem investigação
-separada; não houve redução silenciosa de recursos ou remoção de credenciais.
+constituem a correção da rota local descrita acima. A inicialização MicroLink
+passou a reservar seu workspace antes de outras alocações e tem prioridade
+temporária sobre novas conexões TLS. O log USB bloqueante após o HTML foi
+removido e respostas autenticadas pelo relay passaram a conservar esse caminho
+por peer. Sinric, coordenação e relay foram verificados conectados na ESP;
+configuração e identidade persistente foram comparadas antes e depois dos
+uploads, sem perda de credenciais.
 
-Não houve alteração da EFI, BootOrder, serviço ou configuração do agente deste
-PC. A ativação exige executar o instalador localmente, confirmar a impressão
-digital e escolher os passos assistidos. Em dual boot, prepare cada agente.
-Não foi feito boot físico, desligamento do PC nem mudança real da concessão
-DHCP. Esses testes continuam sendo a aceitação final em hardware.
+Em 24/10/2026, a conversão assistida foi executada no CachyOS real. O agente
+foi atualizado, a imagem iPXE instalada teve seu hash conferido e a ESP aceitou
+o relatório de preparação. O serviço voltou ativo e o BootOrder foi preservado.
+O usuário confirmou o teste físico, incluindo o modo cego. Não foi registrada
+separadamente a sequência de mudanças DHCP. Esses resultados são confirmação
+manual do usuário; não houve
+captura automatizada da tela de boot. Depois, a conversão de volta ao modo
+normal terminou com código zero e o usuário confirmou o funcionamento.
+O modo normal volta a depender do IPv4 confirmado no perfil. Em dual boot,
+cada agente ainda precisa de sua própria conversão; a instalação Windows não
+foi executada neste equipamento.
 
 Os testes PowerShell locais usam fronteiras de sistema simuladas. O runtime
 Windows nativo ainda precisa da execução na matriz Windows do CI ou num PC

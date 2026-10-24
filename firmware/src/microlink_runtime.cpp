@@ -60,6 +60,7 @@ void MicrolinkRuntime::tryStart(bool wifiConnected) {
         Serial.println("MicroLink: initialization failed; LAN dashboard preserved");
         return;
     }
+    bootstrapStarted_ = millis();
     Serial.println("MicroLink: connecting to Tailscale");
 #else
     const MicrolinkStartContext context{false, false, configLocked_, setupMode_, wifiConnected};
@@ -69,11 +70,13 @@ void MicrolinkRuntime::tryStart(bool wifiConnected) {
 
 bool MicrolinkRuntime::beginSinricHandle(bool connected) {
 #if defined(REMOTE_BOOT_ENABLE_MICROLINK) && REMOTE_BOOT_ENABLE_MICROLINK
-    if (connected || !handle_) return true; // Never suspend an established session.
+    if (connected || !handle_ || sinricLease_) return true; // Never suspend a session or upgrade.
     uint32_t now = millis();
+    microlink_diagnostics_t diagnostics{};
+    microlink_get_diagnostics(handle_, &diagnostics);
+    if (!ml_tls_after_bootstrap(diagnostics.control_online, now, bootstrapStarted_)) return false;
     // WebSocket upgrade needs subsequent loop() calls after synchronous TLS.
     // A bounded lease permits this progress without overlapping DERP handshakes.
-    if (sinricLease_) return true;
     if (!ml_tls_admit(now, lastSinricAttempt_, esp_get_free_heap_size(),
             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT))) return false;
     if (!microlink_tls_try_acquire()) return false;

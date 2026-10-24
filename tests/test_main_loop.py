@@ -50,9 +50,10 @@ struct SinricProSwitch {bool sendPowerStateEvent(bool){return true;}};
 SinricProSwitch fakeSwitch;
 SinricProSwitch& operatorLookup(const std::string&){return fakeSwitch;}
 struct Runtime {
- bool beginSinricHandle(bool){return true;}
+ bool ticked=false;
+ bool beginSinricHandle(bool){assert(ticked && "Start VPN runtime before app TLS");return true;}
  template<class F>void endSinricHandle(bool,F){}
- void tick(bool){}
+ void tick(bool){ticked=true;}
 } microlink;
 struct Discovery {int ticks=0;bool connected=false;void tick(bool online){++ticks;connected=online;}} discovery;
 struct Server {int ticks=0;void handleClient(){++ticks;}} server;
@@ -81,7 +82,7 @@ int main(){
  assert(WiFi.reconnects==1 && "recover even when SDK emits no more reconnect events");
  clockNow=21001;loop();assert(WiFi.reconnects==1);
  clockNow=41000;loop();assert(WiFi.reconnects==2);
- WiFi.state=WL_CONNECTED;clockNow=41001;loop();
+ WiFi.state=WL_CONNECTED;clockNow=41001;microlink.ticked=false;loop();
  assert(SinricPro.handles==1);assert(WiFi.reconnects==2);assert(discovery.connected);
  WiFi.state=0;clockNow=42000;loop();
  assert(WiFi.reconnects==2 && "do not interrupt SDK's immediate auto-reconnect");

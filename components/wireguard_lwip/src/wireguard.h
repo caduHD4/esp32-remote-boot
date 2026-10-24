@@ -135,6 +135,8 @@ struct wireguard_peer {
 	// This is the latest received IP/port
 	ip_addr_t ip;
 	u16_t port;
+	// Accepted ingress path; retained while IP processing runs asynchronously.
+	bool prefer_derp;
 	// keep-alive interval in seconds, 0 is disable
 	uint16_t keepalive_interval;
 

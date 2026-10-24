@@ -36,3 +36,19 @@ Alterações locais necessárias para o ESP32-C3:
   length. Noise decrypts in place after authentication; HTTP/2 DATA fragments
   feed map framing directly, without a second retained H2 DATA body. Padded DATA
   and flow-control accounting retain the original frame semantics and limits.
+
+- A inicialização da aplicação dá prioridade ao registro da tailnet antes de
+  admitir novas sessões TLS Sinric e DERP. A espera adicional é limitada a20s;
+  sessões existentes/upgrades e a política normal de admissão são preservados.
+
+- A lease do workspace de registro/mapa inicial é adquirida antes do STUN/DNS
+  para evitar fragmentação anterior à reserva; os caminhos de liberação existentes
+  permanecem responsáveis por mapa concluído, falha, desconexão e encerramento.
+
+- Preferência regional DERP e hostname de fallback configuráveis via Kconfig;
+  o padrão do componente é compatível com Dallas e o projeto seleciona São Paulo.
+
+- O retorno WireGuard preserva por peer o último caminho autenticado (DERP ou
+  UDP), inclusive durante entrega IP assíncrona. Probes diretos continuam
+  explícitos por pacote, sem sobrescrever a preferência das respostas. A
+  promoção de next_keypair reata o ponteiro antes de marcar a janela anti-replay.
