@@ -2,7 +2,7 @@
 
 [English](README.md) | [Português (Brasil)](README.pt-BR.md)
 
-Escolha qual sistema instalado o PC vai iniciar, ligue-o pela Ethernet e solicite reinício ou desligamento pela dashboard da ESP32. Versão **3.0.0-alpha.1**, configuração **v3**, API **v2**.
+Escolha qual sistema instalado o PC vai iniciar, ligue-o pela Ethernet e solicite reinício ou desligamento pela dashboard da ESP32. Versão **3.0.0**, configuração **v3**, API **v2**.
 
 Suporta até **4 PCs**, **8 instalações de agent** e **24 entradas UEFI por PC**. Windows e Linux do mesmo computador usam um cadastro de PC e agents separados. O Sinric Pro controla um PC escolhido.
 

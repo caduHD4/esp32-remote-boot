@@ -2,7 +2,7 @@
 
 [English](README.md) | [Português (Brasil)](README.pt-BR.md)
 
-Choose which installed operating system a PC starts, wake it over Ethernet, and request a restart or shutdown from the ESP32 dashboard. Version **3.0.0-alpha.1**, configuration **v3**, API **v2**.
+Choose which installed operating system a PC starts, wake it over Ethernet, and request a restart or shutdown from the ESP32 dashboard. Version **3.0.0**, configuration **v3**, API **v2**.
 
 Supports up to **4 PCs**, **8 agent installations**, and **24 UEFI boot entries per PC**. Windows and Linux on the same physical computer share one PC record and have separate agents. Sinric Pro controls one selected PC.
 

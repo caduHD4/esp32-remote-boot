@@ -19,7 +19,7 @@
 #include "local_wifi.h"
 #include "web_asset.h"
 
-constexpr char Version[]="3.0.0-alpha.1";
+constexpr char Version[]="3.0.0";
 rb::BoundedWebServer server(80); WiFiUDP udp; Preferences nvs; rb::ConfigStore store(nvs);
 WebSocketsServer agentSocket(81); JsonDocument config;
 rb::DiscoveryRuntime discovery;
