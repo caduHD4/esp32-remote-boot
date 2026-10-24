@@ -380,7 +380,7 @@ If a test fails, select the existing Windows/Linux loader from the UEFI menu and
 | net0 no such network device | Enable firmware Network Stack/IPv4 PXE. RTL8125 needs the UEFI/SNP driver with this iPXE revision. |
 | file:autoexec.ipxe not found | If Remote Boot follows, the embedded script is running; diagnose the later error. |
 | DHCP fails | Ethernet cable, router DHCP, firmware driver, VLAN, and the interface selected by iPXE. |
-| Script URL cannot be downloaded | Reserved ESP32 IP, network reachability, and PC record. Rebuild if the ESP32 IP/PC identity changed. |
+| Script URL cannot be downloaded | Network reachability and PC record. In normal mode, check the reserved IP; in blind mode, check signed discovery. Rebuild if the PC identity changed. |
 | Exec format error / RemoteBoot failed | Use the current builder and rebuild/reinstall. RemoteBoot.efi must be a real x86-64 EFI application, not a fixture or stale artifact. |
 | iPXE not listed in GRUB | It is a UEFI boot option, separate from the GRUB menu. Check the firmware menu and EFI entry. |
 | PC boots normally after TEST | TEST is temporary; verify step 9, then configure permanent priority in step 10. |
