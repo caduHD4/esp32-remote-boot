@@ -44,7 +44,7 @@ void pairingRoute(const String& id,const String& action) {
         } else if(pair->confirmed) reply["status"]="confirmed";
         else if(pair->agentId.length()) {
             if(findAgent(pair->agentId).isNull()) { cancelPair(*pair);reply["status"]="canceled"; }
-            else { reply["status"]="approved";reply["agent_id"]=pair->agentId;reply["pc_id"]=pair->pcId;reply["token"]=pair->token;reply["protocol"]=2; }
+            else { reply["status"]="approved";reply["agent_id"]=pair->agentId;reply["pc_id"]=pair->pcId;reply["token"]=pair->token;reply["protocol"]=2;if(discovery.ready())discovery.profile(reply["discovery_profile"].to<JsonObject>(),findPc(config,pair->pcId)); }
         } else reply["status"]="pending";
         jsonReply(200,reply);return;
     }

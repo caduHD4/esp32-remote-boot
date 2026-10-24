@@ -71,3 +71,37 @@ pio device monitor -b 115200
 Não use `erase-flash` se quiser preservar a configuração existente. A troca de variante não modifica `boot.ipxe`, `RemoteBoot.efi`, `BootNext` ou o `BootOrder` do PC.
 
 Referências: [auth keys do Tailscale](https://tailscale.com/kb/1085/auth-keys/) e [endereços Tailscale 100.x](https://tailscale.com/docs/concepts/tailscale-ip-addresses).
+
+## Inicialização e resposta da dashboard
+
+O registro inicial da Tailscale começa antes de novas conexões TLS do Sinric e DERP,
+para que seu workspace contíguo caiba na memória da ESP32-C3. Enquanto esse
+registro está pendente, a nova prioridade adia essas novas conexões por até20s;
+depois volta à política normal de admissão. Sessões conectadas e upgrades já
+em andamento continuam recebendo serviço. O workspace temporário é reservado
+antes de DNS/sockets e liberado no fim do mapa inicial, nas falhas e ao encerrar.
+As credenciais não são alteradas.
+
+O envio do HTML não escreve diagnósticos na USB: uma saída serial sem leitor
+pode bloquear o atendimento da consulta seguinte por segundos. Falhas de envio
+continuam no log de eventos. Para repetir o teste na placa, feche o monitor:
+
+```sh
+python3 tests/hardware_http_latency.py http://IP_DA_ESP
+```
+
+Esse teste só lê a dashboard e o estado de configuração, sem senha ou mudanças.
+Ele mede a pausa entre receber o HTML e concluir a consulta seguinte; não mede
+sozinho o tempo total de abertura pelo 4G.
+
+Esta implantação no Brasil prefere o relay de São Paulo (região11). O componente
+continua com padrão compatível Dallas; o projeto seleciona São Paulo no
+`sdkconfig.defaults`. Para outro local, configure `CONFIG_ML_PREFERRED_DERP_REGION`
+e `CONFIG_ML_FALLBACK_DERP_HOST` com região/hostname correspondentes do DERPMap
+público atual. Builds já configurados também precisam atualizar essas opções
+no sdkconfig. A preferência não muda a identidade nem impede UDP direto.
+
+Ao alternar entre Wi-Fi e rede móvel, respostas WireGuard seguem o último
+caminho autenticado daquele peer. Um endereço UDP antigo é mantido para probes,
+mas não substitui o relay usado pela solicitação. Probes diretos não mudam essa
+preferência; tráfego direto autenticado permite retomar o caminho direto.

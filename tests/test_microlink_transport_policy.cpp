@@ -2,6 +2,12 @@
 #include <cstdio>
 #include "../components/microlink/src/ml_transport_policy.h"
 int main(){
+    assert(!ml_tls_after_bootstrap(false,1000,1000));
+    assert(!ml_tls_after_bootstrap(false,20999,1000));
+    assert(ml_tls_after_bootstrap(false,21000,1000));
+    assert(ml_tls_after_bootstrap(true,1001,1000));
+    assert(!ml_tls_after_bootstrap(false,100,UINT32_MAX-100));
+    assert(ml_tls_after_bootstrap(false,19900,UINT32_MAX-100));
     assert(!ml_tls_admit(1000,0,100,100));
     assert(ml_tls_admit(60000,0,100,100)); // Bounded low-memory deferral, not starvation.
     assert(ml_tls_admit(5000,0,100000,50000));

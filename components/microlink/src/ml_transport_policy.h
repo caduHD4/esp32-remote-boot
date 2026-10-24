@@ -2,6 +2,11 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+// Give registration its contiguous workspace before another TLS client fragments
+// the heap. An unreachable VPN must not postpone application TLS indefinitely.
+static inline bool ml_tls_after_bootstrap(bool control_online, uint32_t now, uint32_t started) {
+    return control_online || (uint32_t)(now-started) >= 20000;
+}
 // Headroom is admission guidance, not an allocation guarantee. A low-memory
 // attempt gets a turn after 60s; failed callers retain their retry request.
 static inline bool ml_tls_admit(uint32_t now, uint32_t previous, size_t free_heap, size_t largest) {

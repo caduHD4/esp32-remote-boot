@@ -2443,6 +2443,15 @@ void ml_coord_task(void *arg) {
             break;
 
         case COORD_STUN_PROBE:
+            /* Reserve the initial-map lease before DNS, sockets, and other
+             * tasks can fragment its required contiguous block. Reconnect
+             * and map completion already release this task-owned lease. */
+            if (!ml_coord_workspace_acquire(&s_coord_workspace,
+                    ML_H2_BUFFER_SIZE+1, ml_psram_malloc)) {
+                ESP_LOGW(TAG, "Bootstrap workspace unavailable; retrying before network setup");
+                state = COORD_RECONNECTING;
+                break;
+            }
             ESP_LOGI(TAG, "Running STUN probe...");
             /* Pre-resolve STUN servers (cached, only resolves once) */
             ml_stun_resolve_servers(ml);

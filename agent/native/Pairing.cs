@@ -53,6 +53,7 @@ public sealed class PairingClient : IDisposable {
                 if(state!="approved")throw new InvalidOperationException("Invalid pairing state");
                 var config=new Config{Url=url,Protocol=result.GetProperty("protocol").GetInt32(),PcId=Json.Text(result,"pc_id"),AgentId=Json.Text(result,"agent_id"),
                     Token=Json.Text(result,"token"),AllowReboot=allowReboot,AllowShutdown=allowShutdown};
+                config.ApplyPairingProfile(result);
                 config.Save(path);status("Approved; credential saved");
                 await verify(config,bounded);status("Agent identity verified");
                 for(int attempt=0;attempt<3;attempt++) {

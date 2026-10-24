@@ -1,6 +1,8 @@
 #Requires -RunAsAdministrator
-param([Parameter(Mandatory)][string]$EspAddress,[Parameter(Mandatory)][string]$IpxeFile,[string]$AgentConfig,[string]$ManifestFile,[string]$LoaderFile,[switch]$FullScan)
+param([string]$EspAddress,[string]$IpxeFile,[string]$AgentConfig,[string]$ManifestFile,[string]$LoaderFile,[switch]$FullScan,[string]$DiscoveryProfile,[string]$AgentFile,[string]$Rollback)
 $ErrorActionPreference='Stop'
+if($DiscoveryProfile -or $AgentFile -or $Rollback){ & (Join-Path $PSScriptRoot 'convert.ps1') @PSBoundParameters; return }
+if(-not $EspAddress -or -not $IpxeFile){throw 'EspAddress and IpxeFile are required for the legacy installer.'}
 $root=Split-Path (Split-Path $PSScriptRoot)
 . (Join-Path $root 'agent\windows\Common.ps1')
 $address=$null

@@ -91,12 +91,14 @@ static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr,
 	// Don't overwrite a valid endpoint with 0.0.0.0 (DERP-injected packets have no real source)
 	// This bug was causing DERP routing to break after receiving the first packet
 	if (ip_addr_isany(addr)) {
+		__atomic_store_n(&peer->prefer_derp, true, __ATOMIC_RELEASE);
 		WG_DEBUG("[WG] update_peer_addr: skipping DERP (0.0.0.0)\n");
 		return;  // Skip updating endpoint for DERP packets
 	}
 	WG_DEBUG("[WG] update_peer_addr: %s:%u\n", ipaddr_ntoa(addr), port);
 	peer->ip = *addr;
 	peer->port = port;
+	__atomic_store_n(&peer->prefer_derp, false, __ATOMIC_RELEASE);
 }
 
 static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device *device, const ip_addr_t *ipaddr) {
@@ -132,7 +134,7 @@ static bool wireguardif_can_send_initiation(struct wireguard_peer *peer) {
 	return ((peer->last_initiation_tx == 0) || (wireguard_expired(peer->last_initiation_tx, REKEY_TIMEOUT)));
 }
 
-static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct wireguard_peer *peer) {
+static err_t wireguardif_peer_output_path(struct netif *netif, struct pbuf *q, struct wireguard_peer *peer, bool direct_probe) {
 	struct wireguard_device *device = (struct wireguard_device *)netif->state;
 
 	WG_DEBUG("[WG_OUT] peer_output: endpoint=%s:%u, tot_len=%u\n",
@@ -142,7 +144,8 @@ static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct
 	// Check if peer has a direct endpoint (non-zero IP and port)
 	// If not, use DERP relay callback if available.
 	// force_derp_output: cellular mode — always route through DERP.
-	if (ip_addr_isany(&peer->ip) || peer->port == 0 || device->force_derp_output) {
+	if ((!direct_probe && __atomic_load_n(&peer->prefer_derp, __ATOMIC_ACQUIRE)) ||
+	    ip_addr_isany(&peer->ip) || peer->port == 0 || device->force_derp_output) {
 		WG_DEBUG("[WG_OUT] No direct endpoint or force_derp, checking DERP\n");
 
 		if (device->derp_output_fn) {
@@ -196,6 +199,11 @@ static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct
 	//TODO: Support DSCP and ECN - lwip requires this set on PCB globally, not per packet
 	return udp_sendto(device->udp_pcb, q, &peer->ip, peer->port);
 }
+
+static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct wireguard_peer *peer) {
+    return wireguardif_peer_output_path(netif, q, peer, false);
+}
+
 
 static err_t wireguardif_device_output(struct wireguard_device *device, struct pbuf *q, const ip_addr_t *ipaddr, u16_t port) {
 	// In magicsock mode, use external UDP output callback
@@ -472,16 +480,14 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 				       decrypt_ok, (unsigned)src_len, (unsigned long long)nonce);
 				if (decrypt_ok) {
 
-					// 3. Since the packet has authenticated correctly, the source IP of the outer UDP/IP packet is used to update the endpoint for peer TrMv...WXX0.
-					// Update the peer location
-					update_peer_addr(peer, addr, port);
-
 					now = wireguard_sys_now();
 					keypair->last_rx = now;
 					peer->last_rx = now;
 
 					// Might need to shuffle next key --> current keypair
-					keypair_update(peer, keypair);
+                    const bool promoted_next = (keypair == &peer->next_keypair);
+                    keypair_update(peer, keypair);
+                    if (promoted_next) keypair = &peer->curr_keypair;
 
 					// Check to see if we should rekey
 					if (keypair->initiator && wireguard_expired(keypair->keypair_millis, REJECT_AFTER_TIME - peer->keepalive_interval - REKEY_TIMEOUT)) {
@@ -491,6 +497,11 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					// Make sure that link is reported as up
 					netif_set_link_up(device->netif);
 
+                    // Empty keepalives also authenticate roaming, but replays
+                    // must not change the reply path.
+                    if (!pbuf->tot_len && wireguard_check_replay(keypair, nonce)) {
+                        update_peer_addr(peer, addr, port);
+                    }
 					if (pbuf->tot_len > 0) {
 						//4a. Once the packet payload is decrypted, the interface has a plaintext packet. If this is not an IP packet, it is dropped.
 						iphdr = (struct ip_hdr *)pbuf->payload;
@@ -544,6 +555,10 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 
 								// 5. If the plaintext packet has not been dropped, it is inserted into the receive queue of the wg0 interface.
 								if (dest_ok) {
+                                    // Commit the authenticated path before queuing IP
+                                    // delivery; later TCP replies must use this peer's
+                                    // relay after a Wi-Fi/mobile network transition.
+                                    update_peer_addr(peer, addr, port);
 									// Send packet to be processed by LWIP
 									WG_DEBUG("[WG_RX_IP] Passing %u bytes to IP layer\n", (unsigned)pbuf->tot_len);
 									if (device->netif->input(pbuf, device->netif) == ERR_OK) {
@@ -871,7 +886,7 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 	pbuf_free(p);
 }
 
-static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_peer *peer) {
+static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_peer *peer, bool direct_probe) {
 	if (!netif || !netif->state) {
 		return ERR_ARG;
 	}
@@ -885,7 +900,7 @@ static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_pee
 
 	pbuf = wireguardif_initiate_handshake(device, peer, &msg, &result);
 	if (pbuf) {
-		result = wireguardif_peer_output(netif, pbuf, peer);
+		result = wireguardif_peer_output_path(netif, pbuf, peer, direct_probe);
 		WG_DEBUG("[WG_TX] Handshake init sent, result=%d, sender_idx=%lu, to %s:%u\n",
 			result, (unsigned long)msg.sender,
 			ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip), peer->port);
@@ -934,7 +949,7 @@ err_t wireguardif_connect(struct netif *netif, u8_t peer_index) {
 			// Force immediate handshake to the new endpoint
 			peer->send_handshake = true;
 			peer->last_initiation_tx = 0;
-			wireguard_start_handshake(netif, peer);
+			wireguard_start_handshake(netif, peer, true);
 			result = ERR_OK;
 		} else {
 			result = ERR_ARG;
@@ -1155,7 +1170,7 @@ static void wireguardif_tmr(void *arg) {
 				wireguardif_send_keepalive(device, peer);
 			}
 			if (should_send_initiation(peer)) {
-				wireguard_start_handshake(device->netif, peer);
+				wireguard_start_handshake(device->netif, peer, false);
 			}
 
 			if ((peer->curr_keypair.valid) || (peer->prev_keypair.valid)) {
@@ -1208,7 +1223,7 @@ void wireguardif_periodic(struct netif *netif) {
 				       ip_addr_isany(&peer->connect_ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->connect_ip),
 				       peer->connect_port,
 				       peer->active, peer->send_handshake);
-				wireguard_start_handshake(device->netif, peer);
+				wireguard_start_handshake(device->netif, peer, false);
 			}
 			if ((peer->curr_keypair.valid) || (peer->prev_keypair.valid)) {
 				link_up = true;
@@ -1413,7 +1428,7 @@ err_t wireguardif_connect_derp(struct netif *netif, u8_t peer_index) {
 		// This is safe because DISCO has confirmed the path works
 		peer->last_initiation_tx = 0;
 		// Now start handshake immediately
-		wireguard_start_handshake(netif, peer);
+		wireguard_start_handshake(netif, peer, false);
 		result = ERR_OK;
 	}
 	return result;

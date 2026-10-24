@@ -2,6 +2,12 @@
 set -euo pipefail
 umask 077
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+# Optional assisted conversion keeps legacy positional invocations unchanged.
+for option in "$@"; do
+    case $option in
+        --discovery-profile|--agent-file|--rollback) exec bash "$root/installer/linux/convert.sh" "$@" ;;
+    esac
+done
 agent_config=${RB_AGENT_CONFIG:-/etc/remote-boot/agent.json}
 # shellcheck source=agent/linux/common.sh
 source "$root/agent/linux/common.sh"

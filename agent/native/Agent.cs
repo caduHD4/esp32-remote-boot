@@ -49,8 +49,8 @@ public sealed class CommandGate {
     }
 }
 public sealed class Agent {
-    readonly Config config;readonly IHost host;readonly string ackPath;
-    public Agent(Config config,IHost host,string ackPath){this.config=config;this.host=host;this.ackPath=ackPath;}
+    readonly Config config;readonly IHost host;readonly string ackPath;readonly string configPath;
+    public Agent(Config config,IHost host,string ackPath,string configPath=null){this.config=config;this.host=host;this.ackPath=ackPath;this.configPath=configPath;}
     public static async Task<JsonDocument> Receive(WebSocket socket,CancellationToken token) {
         var bytes=new byte[12000];int count=0;
         while(true) {
@@ -77,6 +77,8 @@ public sealed class Agent {
         using var response=await http.SendAsync(request,token);response.EnsureSuccessStatusCode();
     }
     public async Task ConnectOnce(CancellationToken token,bool checkOnly=false) {
+        // Never send the bearer token before a blind endpoint is signature-verified.
+        if(config.BlindMode)DiscoveryRuntime.EnsureEndpoint(config,configPath,token);
         using var socket=new ClientWebSocket();
         using var wsHandler=new HttpClientHandler{UseProxy=false,AllowAutoRedirect=false};
         using var wsHttp=new HttpMessageInvoker(wsHandler,false);
@@ -135,38 +137,96 @@ public static class Program {
     public static async Task<int> Main(string[] args) {
         try {
             if(args.Length==1&&args[0]=="--self-test")return SelfTest.Run();
-            bool pair=false,check=false,allowReboot=false,allowShutdown=false;string configPath="",url="";
-            for(int i=0;i<args.Length;i++) {
-                switch(args[i]) {
-                    case "--pair":pair=true;break;
-                    case "--check":check=true;break;
-                    case "--allow-reboot":allowReboot=true;break;
-                    case "--allow-shutdown":allowShutdown=true;break;
-                    case "--config":if(++i==args.Length)throw new Exception("Missing configuration path");configPath=args[i];break;
-                    case "--url":if(++i==args.Length)throw new Exception("Missing URL");url=args[i];break;
-                    default:throw new Exception("Unknown option");
+            if(args.Length>0) {
+                switch(args[0]) {
+                    case "--discover":return Discover(args);
+                    case "--resolve":return Resolve(args);
+                    case "--apply-profile":return ApplyProfile(args);
+                    case "--report-preparation":return await ReportPreparation(args);
                 }
             }
-            if(configPath==""||pair&&url==""||pair&&check||!pair&&url!="") {
-                Console.Error.WriteLine("Usage: remote-boot-agent --pair --url http://IP --config PATH [--allow-reboot] [--allow-shutdown] | --config PATH [--check] | --self-test");return 2;
-            }
-            string path=Path.GetFullPath(configPath);var directory=Path.GetDirectoryName(path);
-            if(!Directory.Exists(directory))throw new Exception("Create a protected configuration directory first");
-            using var instance=new FileStream(Path.Combine(directory,"agent.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
-            using var stop=new CancellationTokenSource();Console.CancelKeyPress+=(s,e)=>{e.Cancel=true;stop.Cancel();};
-            if(pair) {
-                using var pairing=new PairingClient();
-                await pairing.Pair(new Uri(url),path,allowReboot,allowShutdown,async (paired,token)=>{
-                    var verificationHost=new NativeHost();
-                    await new Agent(paired,verificationHost,Path.Combine(directory,"ack.txt")).ConnectOnce(token,true);
-                },stop.Token);return 0;
-            }
-            var config=Config.Read(path);
-            var host=new NativeHost();var agent=new Agent(config,host,Path.Combine(directory,"ack.txt"));
-            if(check){using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(20));await agent.ConnectOnce(timeout.Token,true);Console.WriteLine("Agent identity verified");}
-            else await agent.Run(stop.Token);return 0;
+            return await RunAgent(args);
         } catch(OperationCanceledException){Console.Error.WriteLine("Agent canceled or timed out");return 1;}
-        catch(Exception ex){Console.Error.WriteLine(args.Length==1&&args[0]=="--self-test"?ex.ToString():"Agent stopped: "+ex.GetType().Name);return 1;}
+        catch(Exception ex){Console.Error.WriteLine(args.Length==1&&args[0]=="--self-test"?ex.ToString():"Agent stopped: "+ex.Message);return 1;}
+    }
+    static string Value(string[] args,ref int index,string option) {
+        if(++index>=args.Length)throw new Exception("Missing value for "+option);
+        return args[index];
+    }
+    static int Timeout(string[] args,ref int index){string value=Value(args,ref index,"--timeout-ms");if(!int.TryParse(value,out int timeout)||timeout<100||timeout>60000)throw new Exception("Invalid --timeout-ms");return timeout;}
+    static int Discover(string[] args) {
+        string profilePath="";int timeout=10000;
+        for(int i=1;i<args.Length;i++) {
+            switch(args[i]){case "--profile":profilePath=Value(args,ref i,"--profile");break;case "--timeout-ms":timeout=Timeout(args,ref i);break;default:throw new Exception("Unknown option "+args[i]);}
+        }
+        DiscoveryProfile profile=profilePath.Length>0?DiscoveryProfile.Read(profilePath):null;
+        var replies=new DiscoveryClient().Discover(profile,timeout,CancellationToken.None);
+        if(profile!=null&&replies.Count==0)return 1;
+        Console.WriteLine(DiscoveryRuntime.JsonCandidates(replies,profile!=null));return 0;
+    }
+    static int Resolve(string[] args) {
+        string profilePath="";int timeout=10000;
+        for(int i=1;i<args.Length;i++) {
+            switch(args[i]){case "--profile":profilePath=Value(args,ref i,"--profile");break;case "--timeout-ms":timeout=Timeout(args,ref i);break;default:throw new Exception("Unknown option "+args[i]);}
+        }
+        if(profilePath.Length==0)throw new Exception("--resolve requires --profile");
+        var profile=DiscoveryProfile.Read(profilePath);var replies=new DiscoveryClient().Discover(profile,timeout,CancellationToken.None);
+        if(replies.Count==0)return 1;Console.WriteLine(replies[0].Address);return 0;
+    }
+    static int ApplyProfile(string[] args) {
+        string profilePath="",configPath="",confirm="";int start=1;
+        if(args.Length>1&&!args[1].StartsWith("--",StringComparison.Ordinal)){profilePath=args[1];start=2;}
+        for(int i=start;i<args.Length;i++) {
+            switch(args[i]) {
+                case "--profile":profilePath=Value(args,ref i,"--profile");break;
+                case "--config":configPath=Value(args,ref i,"--config");break;
+                case "--confirm-fingerprint":confirm=Value(args,ref i,"--confirm-fingerprint");break;
+                default:throw new Exception("Unknown option "+args[i]);
+            }
+        }
+        if(profilePath.Length==0||configPath.Length==0||confirm.Length==0)throw new Exception("--apply-profile requires --profile, --config and --confirm-fingerprint");
+        DiscoveryRuntime.ApplyProfile(profilePath,configPath,confirm);Console.WriteLine("Discovery profile applied");return 0;
+    }
+    static async Task<int> ReportPreparation(string[] args) {
+        string manifestPath="",configPath="";int start=1;
+        if(args.Length>1&&!args[1].StartsWith("--",StringComparison.Ordinal)){manifestPath=args[1];start=2;}
+        for(int i=start;i<args.Length;i++) {
+            switch(args[i]){case "--manifest":manifestPath=Value(args,ref i,"--manifest");break;case "--config":configPath=Value(args,ref i,"--config");break;default:throw new Exception("Unknown option "+args[i]);}
+        }
+        if(manifestPath.Length==0||configPath.Length==0)throw new Exception("--report-preparation requires --manifest and --config");
+        await DiscoveryRuntime.ReportPreparation(manifestPath,configPath,CancellationToken.None);Console.WriteLine("Preparation reported");return 0;
+    }
+    static async Task<int> RunAgent(string[] args) {
+        bool pair=false,check=false,allowReboot=false,allowShutdown=false;string configPath="",url="";
+        for(int i=0;i<args.Length;i++) {
+            switch(args[i]) {
+                case "--pair":pair=true;break;
+                case "--check":check=true;break;
+                case "--allow-reboot":allowReboot=true;break;
+                case "--allow-shutdown":allowShutdown=true;break;
+                case "--config":if(++i==args.Length)throw new Exception("Missing configuration path");configPath=args[i];break;
+                case "--url":if(++i==args.Length)throw new Exception("Missing URL");url=args[i];break;
+                default:throw new Exception("Unknown option");
+            }
+        }
+        if(configPath==""||pair&&url==""||pair&&check||!pair&&url!="") {
+            Console.Error.WriteLine("Usage: remote-boot-agent --pair --url http://IP --config PATH [--allow-reboot] [--allow-shutdown] | --config PATH [--check] | --discover [--profile FILE] [--timeout-ms N] | --resolve --profile FILE | --apply-profile FILE --config PATH --confirm-fingerprint HEX64 | --report-preparation MANIFEST --config PATH | --self-test");return 2;
+        }
+        string path=Path.GetFullPath(configPath);var directory=Path.GetDirectoryName(path);
+        if(!Directory.Exists(directory))throw new Exception("Create a protected configuration directory first");
+        using var instance=new FileStream(Path.Combine(directory,"agent.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
+        using var stop=new CancellationTokenSource();Console.CancelKeyPress+=(s,e)=>{e.Cancel=true;stop.Cancel();};
+        if(pair) {
+            using var pairing=new PairingClient();
+            await pairing.Pair(new Uri(url),path,allowReboot,allowShutdown,async (paired,token)=>{
+                var verificationHost=new NativeHost();
+                await new Agent(paired,verificationHost,Path.Combine(directory,"ack.txt")).ConnectOnce(token,true);
+            },stop.Token);return 0;
+        }
+        var config=Config.Read(path);
+        var host=new NativeHost();var agent=new Agent(config,host,Path.Combine(directory,"ack.txt"),path);
+        if(check){using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(30));await agent.ConnectOnce(timeout.Token,true);Console.WriteLine("Agent identity verified");}
+        else await agent.Run(stop.Token);return 0;
     }
 }
 }

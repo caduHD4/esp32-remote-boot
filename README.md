@@ -140,6 +140,20 @@ For dual boot, create **one record for the physical PC**, then pair both OS agen
 
 **Checkpoint:** the PC card appears. Offline is expected until its agent connects. The internal PC ID is generated automatically; you do not need to find it in the dashboard.
 
+## 4b. Optional: blind mode (dynamic IP)
+
+Use this when the ESP32 or the PC can receive a different IPv4 after a reboot. It is optional and per PC.
+
+1. In **Ajustes do PC selecionado**, check **Ativar modo cego — encontrar a ESP automaticamente quando o IP mudar**, then save. On **Adicionar PC**, the same checkbox is available.
+2. The checkbox only records the requested mode. It does not write EFI, change BootOrder, restart the PC or update an agent.
+3. Click **Exportar perfil de descoberta**. The downloaded public profile contains the ESP device ID, public key, fingerprint, current IPv4 and ports; it contains no token.
+4. Give that profile to the installer on the real PC. The installer displays the fingerprint, asks for explicit trust, backs up the agent/EFI files, prepares the selected agent and image, and then reports preparation. Prepare each OS in a dual-boot PC separately.
+5. Follow the [assisted conversion instructions](installer/README.md) on each OS. Until the installer reports both the loader and the agent as prepared, the dashboard shows the mode as requested/partial, not ready.
+
+The agent verifies the signed UDP reply with the pinned P-256 key before opening WebSocket or sending the bearer token. The ESP also publishes `remote-boot-<id>.local`; the agent tries the cached IP first, then the mDNS hostname, then LAN discovery. The iPXE loader also tries mDNS when the cached address is stale and broadcast does not answer. A DNS answer supplies only an address candidate; both clients require a fresh signed response from the pinned ESP before using it. This mode does not cross VLANs, guest Wi-Fi isolation or client isolation, and does not change DHCP settings.
+
+To return to normal mode, uncheck the option, save, export a fresh profile, and run assisted conversion again on each OS. Do not pair again. The checkbox alone does not update the agent or iPXE; normal mode requires reserving the ESP IPv4 on the router. See [validation results and limits](docs/blind-mode-validation.md).
+
 ## 5. Download the agents and check the ZIPs
 
 From the same [3.x release](https://github.com/caduHD4/esp32-remote-boot/releases), download **agent-SHA256SUMS** and the package for each OS you use:
@@ -366,7 +380,7 @@ If a test fails, select the existing Windows/Linux loader from the UEFI menu and
 | net0 no such network device | Enable firmware Network Stack/IPv4 PXE. RTL8125 needs the UEFI/SNP driver with this iPXE revision. |
 | file:autoexec.ipxe not found | If Remote Boot follows, the embedded script is running; diagnose the later error. |
 | DHCP fails | Ethernet cable, router DHCP, firmware driver, VLAN, and the interface selected by iPXE. |
-| Script URL cannot be downloaded | Reserved ESP32 IP, network reachability, and PC record. Rebuild if the ESP32 IP/PC identity changed. |
+| Script URL cannot be downloaded | Network reachability and PC record. In normal mode, check the reserved IP; in blind mode, check signed discovery. Rebuild if the PC identity changed. |
 | Exec format error / RemoteBoot failed | Use the current builder and rebuild/reinstall. RemoteBoot.efi must be a real x86-64 EFI application, not a fixture or stale artifact. |
 | iPXE not listed in GRUB | It is a UEFI boot option, separate from the GRUB menu. Check the firmware menu and EFI entry. |
 | PC boots normally after TEST | TEST is temporary; verify step 9, then configure permanent priority in step 10. |
@@ -377,7 +391,7 @@ More: [troubleshooting](docs/troubleshooting.md), [agent details](docs/native-ag
 
 ## Updates and development checks
 
-Ordinary firmware uploads preserve NVS settings. Changing the ESP32 IP, PC identity, or EFI code requires rebuilding and reinstalling that PC's iPXE image. Updating only the ESP32 firmware does not replace the PC's EFI files. There is no OTA update.
+Ordinary firmware uploads preserve NVS settings. In normal mode, changing the ESP32 IP requires rebuilding and reinstalling that PC's iPXE image. In blind mode, an IP change within the same LAN is discovered automatically without reinstalling. Changing the PC identity or EFI code still requires updating its image. Updating only the ESP32 firmware does not replace the PC's EFI files. There is no OTA update.
 
 From the source folder, with development dependencies installed:
 

@@ -74,8 +74,8 @@ extern "C" {
 #define ML_DERP_MAX_FRAME       (ML_MAX_PACKET_SIZE + 64)
 
 /* DERP */
-#define ML_DERP_REGION          9       /* Dallas (dfw) */
-#define ML_DERP_HOST            "derp9e.tailscale.com"
+#define ML_DERP_REGION          CONFIG_ML_PREFERRED_DERP_REGION
+#define ML_DERP_HOST            CONFIG_ML_FALLBACK_DERP_HOST
 #define ML_DERP_PORT            443
 
 /* Tailscale control plane */

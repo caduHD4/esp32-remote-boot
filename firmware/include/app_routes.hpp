@@ -42,10 +42,12 @@ void catalogSync(PcRuntime& runtime) {
 }
 void pcRoute(const String& id,const String& action) {
     PcRuntime* pc=runtime(id);if(!pc) { errorReply(404,"PC_NOT_FOUND");return; }JsonObject settings=findPc(config,id);
+    if(action=="discovery-profile"&&server.method()==HTTP_GET){JsonDocument reply;if(!discovery.profile(reply.to<JsonObject>(),settings)){errorReply(503,"DISCOVERY_UNAVAILABLE");return;}jsonReply(200,reply);return;}
     if(action==""&&server.method()==HTTP_GET) { JsonDocument reply;copyPcMetadata(reply.to<JsonObject>(),settings);reply["systems_count"]=settings["systems"].size();appendPcStatus(*pc,reply["status"].to<JsonObject>());jsonReply(200,reply);return; }
     if(action==""&&server.method()==HTTP_PUT) {
         JsonDocument input;ConfigTransaction next;if(!body(input))return;next.take();
-        if(!patchAllowed(input.as<JsonObject>(),findPc(next,id),"|name|mac|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|"))return;
+        if(!rb::discoveryPatch(findPc(next,id),input.as<JsonObjectConst>(),discovery.ready())){errorReply(400,"INVALID_BLIND_MODE");return;}
+        if(!patchAllowed(input.as<JsonObject>(),findPc(next,id),"|name|mac|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|blind_mode|"))return;
         if(commit(next))savedReply();return;
     }
     if(action==""&&server.method()==HTTP_DELETE) {
@@ -104,9 +106,25 @@ void dynamicRoute() {
     }
     errorReply(404,"NOT_FOUND");
 }
+// Installer authentication is token-bound and independent of a live WS session.
+void preparationReport(){
+    if(locked||setupMode){errorReply(409,"SETUP_REQUIRED");return;}
+    String token=bearer();JsonObject binding;for(JsonObject candidate:config["agents"].as<JsonArray>())if(rb::tokenEqual(token.c_str(),candidate["token"]|"")){binding=candidate;break;}
+    if(binding.isNull()){errorReply(403,"FORBIDDEN");return;}
+    JsonDocument input;if(!body(input))return;String pcId=binding["pc_id"]|"",agentId=binding["agent_id"]|"";
+    rb::Preparation result=rb::discoveryPreparation(findPc(config,pcId),binding,input.as<JsonObjectConst>(),token.c_str(),false);
+    if(result==rb::Preparation::Invalid){errorReply(400,"INVALID_PREPARATION");return;}
+    if(result==rb::Preparation::Stale){errorReply(409,"STALE_MODE_REVISION");return;}
+    if(result==rb::Preparation::Changed){
+        ConfigTransaction next;next.take();JsonObject agent;for(JsonObject a:next["agents"].as<JsonArray>())if(agentId==String(a["agent_id"]|"")){agent=a;break;}
+        if(rb::discoveryPreparation(findPc(next,pcId),agent,input.as<JsonObjectConst>(),token.c_str(),true)!=rb::Preparation::Changed){errorReply(409,"PREPARATION_CONFLICT");return;}
+        if(!commit(next))return;
+    }
+    savedReply();
+}
 void routes() {
     const char* headers[]={"Authorization","If-None-Match","X-Agent-Session"};server.collectHeaders(headers,3);
-    server.on("/",HTTP_GET,[]{String etag=String('"')+webAssetEtag+'"';server.sendHeader("ETag",etag);server.sendHeader("Cache-Control","no-cache");if(server.header("If-None-Match")==etag){server.send(304);return;}server.sendHeader("Content-Encoding","gzip");server.send_P(200,"text/html",reinterpret_cast<const char*>(webAsset),sizeof webAsset);});
+    server.on("/",HTTP_GET,[]{String etag=String('"')+webAssetEtag+'"';server.sendHeader("ETag",etag);server.sendHeader("Cache-Control","no-cache");if(server.header("If-None-Match")==etag){server.send(304);return;}server.sendHeader("Content-Encoding","gzip");if(!server.sendBoundedAsset(200,"text/html",webAsset,sizeof webAsset))logEvent("HTTP_ASSET_ABORTED");});
     server.on("/api/v2/setup",HTTP_GET,[]{JsonDocument reply;reply["required"]=setupMode&&!locked;reply["config_locked"]=locked;jsonReply(200,reply);});
     server.on("/api/v2/setup",HTTP_POST,[]{
         if(!setupMode||locked){errorReply(409,"SETUP_CLOSED");return;}JsonDocument input;ConfigTransaction next;if(!body(input))return;
@@ -114,13 +132,16 @@ void routes() {
         if(!rb::validCredential(password)){errorReply(400,"INVALID_PASSWORD");return;}if(!repeat||strcmp(password,repeat)){errorReply(400,"PASSWORD_MISMATCH");return;}
         defaults(next);next["admin_token"]=password;if(!commit(next))return;setupMode=false;savedReply(200,true);restartAt=millis()+1500;
     });
+    server.on("/api/v2/discovery",HTTP_GET,[]{if(!auth())return;JsonDocument reply;discovery.status(reply.to<JsonObject>());jsonReply(200,reply);});
+    server.on("/api/v2/agent/preparation",HTTP_POST,preparationReport);
     server.on("/api/v2/bootstrap",HTTP_GET,[]{if(auth())bootstrap();});
     server.on("/api/v2/status",HTTP_GET,[]{if(!auth())return;JsonDocument reply;appendStatus(reply.to<JsonObject>());jsonReply(200,reply);});
     server.on("/api/v2/pcs",HTTP_GET,[]{if(!auth())return;JsonDocument reply;JsonArray arr=reply["pcs"].to<JsonArray>();for(JsonObject pc:config["pcs"].as<JsonArray>()){JsonObject out=arr.add<JsonObject>();copyPcMetadata(out,pc);}jsonReply(200,reply);});
     server.on("/api/v2/pcs",HTTP_POST,[]{
         if(!auth())return;if(config["pcs"].size()>=rb::MaxPcs){errorReply(409,"PC_CAPACITY");return;}JsonDocument input;ConfigTransaction next;if(!body(input))return;
         next.take();JsonObject pc=next["pcs"].as<JsonArray>().add<JsonObject>();pcDefaults(pc);
-        if(!patchAllowed(input.as<JsonObject>(),pc,"|name|mac|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|"))return;
+        if(!patchAllowed(input.as<JsonObject>(),pc,"|name|mac|wol_port|wol_repeat|wol_interval_ms|pending_ttl_s|physical_boot_behavior|default_target|fallback_boot_id|blind_mode|"))return;
+        if(!pc["blind_mode"].is<bool>()||(pc["blind_mode"].as<bool>()&&!discovery.ready())){errorReply(400,"INVALID_BLIND_MODE");return;}
         String id=pc["pc_id"]|"";if(!commit(next))return;JsonDocument reply;reply["pc"]=findPc(config,id);jsonReply(201,reply);
     });
     server.on("/api/v2/agents",HTTP_GET,[]{if(!auth())return;JsonDocument reply;appendAgents(reply["agents"].to<JsonArray>());jsonReply(200,reply);});
