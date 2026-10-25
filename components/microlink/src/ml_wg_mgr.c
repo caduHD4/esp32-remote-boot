@@ -692,7 +692,7 @@ static void disco_build_ping(microlink_t *ml, int peer_idx,
             pending_probes[i].sent_ms = ml_get_time_ms();
             pending_probes[i].active = true;
             registered = true;
-            ESP_LOGI(TAG, "Probe registered slot=%d peer=%s txid=%02x%02x%02x%02x",
+            ESP_LOGD(TAG, "Probe registered slot=%d peer=%s txid=%02x%02x%02x%02x",
                      i, p->hostname, txid[0], txid[1], txid[2], txid[3]);
             break;
         }
@@ -781,7 +781,7 @@ static void disco_send_ping_to_peer(microlink_t *ml, int peer_idx, bool force) {
                         p->endpoints[i].port == p->best_port) continue;
                     int ret = disco_udp_sendto(ml, pkt, pkt_len, p->endpoints[i].ip, p->endpoints[i].port);
                     if (!direct_sent) {  /* Log only first direct send per peer */
-                        ESP_LOGI(TAG, "  direct probe -> %d.%d.%d.%d:%d (%d eps, ret=%d)",
+                        ESP_LOGD(TAG, "  direct probe -> %d.%d.%d.%d:%d (%d eps, ret=%d)",
                                  (int)((p->endpoints[i].ip >> 24) & 0xFF),
                                  (int)((p->endpoints[i].ip >> 16) & 0xFF),
                                  (int)((p->endpoints[i].ip >> 8) & 0xFF),
@@ -1057,7 +1057,7 @@ static void process_disco_packet(microlink_t *ml, const ml_rx_packet_t *pkt) {
                 }
                 if (entry[10] != 0xff || entry[11] != 0xff) is_v4_mapped = false;
 
-                ESP_LOGI(TAG, "  CMM ep[%d]: v4mapped=%d port=%d bytes=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+                ESP_LOGD(TAG, "  CMM ep[%d]: v4mapped=%d port=%d bytes=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
                          i, is_v4_mapped, port,
                          entry[0], entry[1], entry[2], entry[3],
                          entry[4], entry[5], entry[6], entry[7],
@@ -1079,7 +1079,7 @@ static void process_disco_packet(microlink_t *ml, const ml_rx_packet_t *pkt) {
 
                     if (ping_len > 0) {
                         int ret = disco_udp_sendto(ml, ping_pkt, ping_len, ip, port);
-                        ESP_LOGI(TAG, "CMM probe -> %d.%d.%d.%d:%d (%d bytes, ret=%d)",
+                        ESP_LOGD(TAG, "CMM probe -> %d.%d.%d.%d:%d (%d bytes, ret=%d)",
                                  (int)((ip >> 24) & 0xFF), (int)((ip >> 16) & 0xFF),
                                  (int)((ip >> 8) & 0xFF), (int)(ip & 0xFF),
                                  (int)port, (int)ping_len, ret);
@@ -1107,7 +1107,7 @@ static void process_disco_packet(microlink_t *ml, const ml_rx_packet_t *pkt) {
  * ========================================================================== */
 
 static void process_wg_packet(microlink_t *ml, const ml_rx_packet_t *pkt) {
-    ESP_LOGI(TAG, "WG RX: %d bytes, via_derp=%d, type=%d, from=%02x%02x%02x%02x",
+    ESP_LOGD(TAG, "WG RX: %d bytes, via_derp=%d, type=%d, from=%02x%02x%02x%02x",
              (int)pkt->len, pkt->via_derp,
              pkt->len >= 4 ? pkt->data[0] : -1,
              pkt->src_pubkey[0], pkt->src_pubkey[1], pkt->src_pubkey[2], pkt->src_pubkey[3]);
