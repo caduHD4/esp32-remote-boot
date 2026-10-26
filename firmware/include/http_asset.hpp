@@ -19,4 +19,39 @@ bool sendAssetBytes(const uint8_t* bytes,size_t length,Write write,Clock now,
     }
     return true;
 }
+// Browsers open speculative connections that may never send a request. Hold
+// accepted connections aside and serve whichever sends its request first, so
+// one idle socket cannot stall the single-client server for its full timeout.
+template<class Client,size_t N>
+class PendingConnections {
+public:
+    // Accept returns a falsy client once the listen queue is empty. When full,
+    // the oldest idle connection yields its slot to the newest one.
+    template<class Accept> void admit(Accept accept,uint32_t now) {
+        for(;;) {
+            Client client=accept();if(!client)return;
+            if(count_==N) {
+                size_t victim=0;while(victim<count_&&slots_[victim].client.available())++victim;
+                if(victim==count_){client.stop();return;}
+                slots_[victim].client.stop();erase(victim);
+            }
+            slots_[count_++]=Slot{client,now};
+        }
+    }
+    // Moves out the oldest connection with request bytes; stops closed or expired ones.
+    bool take(Client& out,uint32_t now,uint32_t idleMs) {
+        for(size_t i=0;i<count_;) {
+            Client& client=slots_[i].client;
+            if(client.available()){out=client;erase(i);return true;}
+            if(!client.connected()||uint32_t(now-slots_[i].since)>=idleMs){client.stop();erase(i);continue;}
+            ++i;
+        }
+        return false;
+    }
+    size_t size() const {return count_;}
+private:
+    struct Slot {Client client;uint32_t since;};
+    void erase(size_t index) {for(;index+1<count_;++index)slots_[index]=slots_[index+1];slots_[--count_]=Slot{};}
+    Slot slots_[N]{};size_t count_=0;
+};
 }

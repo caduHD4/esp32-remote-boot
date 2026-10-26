@@ -356,7 +356,7 @@ static void dispatch_derp_frame(microlink_t *ml, uint8_t frame_type,
 
     case DERP_FRAME_PEER_GONE:
         if (payload && payload_len >= 32) {
-            ESP_LOGI(TAG, "DERP PeerGone: %02x%02x%02x%02x (len=%d)",
+            ESP_LOGD(TAG, "DERP PeerGone: %02x%02x%02x%02x (len=%d)",
                      payload[0], payload[1], payload[2], payload[3],
                      (int)payload_len);
         }

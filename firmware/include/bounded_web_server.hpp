@@ -7,6 +7,20 @@ namespace rb {
 class BoundedWebServer:public WebServer {
 public:
     using WebServer::WebServer;
+    // Hides WebServer::handleClient(), which waits HTTP_MAX_DATA_WAIT on each
+    // accepted connection before accepting the next one. An idle preconnect
+    // therefore delayed every dashboard request by 5 s, over LAN and Tailscale.
+    void handleClient() {
+        if(_currentStatus==HC_NONE) {
+            const uint32_t now=millis();decltype(_currentClient) ready;
+            if(!pending_.take(ready,now,HTTP_MAX_DATA_WAIT)) {
+                pending_.admit([this]{return acceptClient();},now);
+                if(!pending_.take(ready,now,HTTP_MAX_DATA_WAIT)){if(_nullDelay)delay(1);return;}
+            }
+            _currentClient=ready;_currentStatus=HC_WAIT_READ;_statusChange=now;
+        }
+        WebServer::handleClient();
+    }
     bool sendBoundedAsset(int code,const char* type,const uint8_t* bytes,size_t length) {
         String header;_prepareHeader(header,code,type,length);
         auto& peer=_currentClient;const int fd=peer.fd();const uint32_t started=millis();
@@ -35,5 +49,15 @@ public:
         }
         return okay;
     }
+private:
+    decltype(_currentClient) acceptClient() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+        return _server.accept();
+#else
+        return _server.available();
+#endif
+    }
+    // Matches the listen backlog the SDK requests for this server.
+    PendingConnections<decltype(_currentClient),4> pending_;
 };
 }

@@ -52,3 +52,8 @@ Alterações locais necessárias para o ESP32-C3:
   UDP), inclusive durante entrega IP assíncrona. Probes diretos continuam
   explícitos por pacote, sem sobrescrever a preferência das respostas. A
   promoção de next_keypair reata o ponteiro antes de marcar a janela anti-replay.
+
+- Logs por pacote WireGuard e por sondagem DISCO/CallMeMaybe/PeerGone passam de
+  INFO para DEBUG. O console do ESP-IDF escreve de forma síncrona (UART a
+  115200 baud e USB sem leitor); no núcleo único do C3, esse volume (~5 linhas/s
+  em repouso, mais durante tráfego) atrasava o loop do servidor web.
